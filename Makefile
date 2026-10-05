@@ -1,9 +1,9 @@
-# Synthetic book generator. `make data` writes data/books and data/truth.
+# Synthetic book generator and supplier-matching calibration.
 PYTHON ?= python3.11
 VENV := .venv
 PY := $(VENV)/bin/python
 
-.PHONY: install data test lint format
+.PHONY: install data calibrate test lint format
 
 $(VENV)/.installed: pyproject.toml
 	$(PYTHON) -m venv $(VENV)
@@ -15,6 +15,9 @@ install: $(VENV)/.installed
 
 data: install ## write synthetic workbooks and ground truth to data/
 	$(PY) -m erp_migration generate
+
+calibrate: install ## print the supplier-matching threshold sweep
+	$(PY) -m erp_migration calibrate
 
 test: install
 	$(PY) -m pytest
