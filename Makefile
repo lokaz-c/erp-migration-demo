@@ -27,7 +27,7 @@ etl: install ## load data/books into PostgreSQL
 calibrate: install ## print the supplier-matching threshold sweep
 	$(PY) -m erp_migration calibrate
 
-test: install
+test: install ## unit tests plus database tests (starts a throwaway container)
 	$(PY) -m pytest
 
 lint: install
