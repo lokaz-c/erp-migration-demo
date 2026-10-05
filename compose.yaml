@@ -1,0 +1,22 @@
+# Local PostgreSQL for the demo. Credentials are demo-only and match
+# erp_migration.config.DEFAULT_DATABASE_URL.
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: erp
+      POSTGRES_PASSWORD: erp
+      POSTGRES_DB: erp
+    ports:
+      - "54329:5432"
+    volumes:
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/18/docker.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp -d erp"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

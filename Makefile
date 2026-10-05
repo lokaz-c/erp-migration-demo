@@ -1,9 +1,11 @@
-# Synthetic book generator and supplier-matching calibration.
+# Generator, PostgreSQL 18 in Docker, and calibration.
 PYTHON ?= python3.11
 VENV := .venv
 PY := $(VENV)/bin/python
+DATABASE_URL ?= postgresql://erp:erp@localhost:54329/erp
+export DATABASE_URL
 
-.PHONY: install data calibrate test lint format
+.PHONY: install db data calibrate test lint format db-down db-reset
 
 $(VENV)/.installed: pyproject.toml
 	$(PYTHON) -m venv $(VENV)
@@ -12,6 +14,9 @@ $(VENV)/.installed: pyproject.toml
 	touch $@
 
 install: $(VENV)/.installed
+
+db: ## start PostgreSQL 18 in Docker and wait until it is healthy
+	docker compose up -d --wait db
 
 data: install ## write synthetic workbooks and ground truth to data/
 	$(PY) -m erp_migration generate
@@ -29,3 +34,9 @@ lint: install
 format: install
 	$(VENV)/bin/ruff check --fix .
 	$(VENV)/bin/ruff format .
+
+db-down:
+	docker compose down
+
+db-reset: ## drop the database volume
+	docker compose down -v
