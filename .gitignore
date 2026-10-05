@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated input books and ground truth (re-create with `make data`)
+data/
+
+# Local configuration
+.env
+
+# OS
+.DS_Store
