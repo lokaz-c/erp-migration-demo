@@ -45,3 +45,37 @@ jobs:
           cache-dependency-path: pyproject.toml
       - run: pip install -e ".[dev]"
       - run: python -m pytest
+
+  report:
+    name: report matches a fresh run
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: erp
+          POSTGRES_DB: erp
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U erp -d erp"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e .
+      - name: Generate, load twice and report (the steps of make demo)
+        run: |
+          python -m erp_migration generate
+          python -m erp_migration etl
+          python -m erp_migration etl
+          python -m erp_migration report
+      - name: Committed report and README results match this run
+        run: git diff --exit-code -- docs/index.html docs/metrics.json README.md

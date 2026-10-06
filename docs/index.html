@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ERP Migration Data Quality</title>
+<meta name="description" content="Data-quality report for a synthetic Excel-to-PostgreSQL ERP migration: rows in and loaded per book, duplicates merged, rejects by reason, supplier reconciliation scored against ground truth.">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #6f6e69;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --ok: #006300;
+  --warn: #9a3412;
+  --code-bg: #f0efec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #a3a29b;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --s1: #3987e5;
+    --s2: #d95926;
+    --ok: #0ca30c;
+    --warn: #ec835a;
+    --code-bg: #262624;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #a3a29b;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --s1: #3987e5;
+  --s2: #d95926;
+  --ok: #0ca30c;
+  --warn: #ec835a;
+  --code-bg: #262624;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 28px; line-height: 1.2; margin: 4px 0 12px; }
+h2 { font-size: 20px; margin: 0 0 8px; }
+h3 { font-size: 15px; margin: 20px 0 6px; }
+p { margin: 8px 0; color: var(--ink-2); }
+a { color: var(--s1); }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.eyebrow { text-transform: uppercase; letter-spacing: 0.06em; font-size: 12px; color: var(--muted); margin: 0; }
+.notice { border: 1px solid var(--border); border-left: 3px solid var(--s2); background: var(--surface);
+          padding: 10px 14px; border-radius: 6px; color: var(--ink); }
+section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+          padding: 20px; margin-top: 20px; }
+nav { margin: 16px 0 0; font-size: 14px; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+.tile { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.tile .label { font-size: 13px; color: var(--ink-2); }
+.tile .value { font-size: 22px; font-weight: 600; }
+.tile .sub { font-size: 12px; color: var(--muted); }
+.table-wrap { overflow-x: auto; margin: 8px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tfoot td { font-weight: 600; border-bottom: none; }
+.small { font-size: 12.5px; color: var(--ink-2); }
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.chart { width: 100%; max-width: 720px; height: auto; display: block; margin: 8px 0; }
+.chart text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+.chart .axis-label { fill: var(--muted); }
+.chart .value { fill: var(--ink); }
+.chart .bar { fill: var(--s1); }
+.chart .baseline { stroke: var(--axis); stroke-width: 1; }
+.chart .grid { stroke: var(--grid); stroke-width: 1; }
+.chart .marker { stroke: var(--ink-2); stroke-width: 1; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .line.s1 { stroke: var(--s1); }
+.chart .line.s2 { stroke: var(--s2); }
+.chart .dot { stroke: var(--surface); stroke-width: 2; }
+.chart .dot.s1 { fill: var(--s1); }
+.chart .dot.s2 { fill: var(--s2); }
+.chart .hit { fill: transparent; }
+.legend { display: flex; gap: 16px; font-size: 13px; color: var(--ink-2); margin-top: 8px; }
+.key { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; }
+.key.s1 { background: var(--s1); }
+.key.s2 { background: var(--s2); }
+details { margin-top: 6px; }
+summary { cursor: pointer; color: var(--ink-2); font-size: 13.5px; }
+footer { margin-top: 24px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <p class="eyebrow">erp-migration-demo</p>
+  <h1>Data-quality report</h1>
+  <p class="notice">Synthetic data. This reconstructs the approach used to migrate a fashion
+  manufacturer's Excel books into a normalized PostgreSQL schema. It is not DIKAM Fashion's
+  production code or data: every supplier, product, employee and amount here was generated
+  (seed 42, books for 2015-2024), and every number on this page was
+  computed by <code>make demo</code>, not typed.</p>
+  <nav>
+    <a href="#summary">Summary</a><a href="#books">Per book</a><a href="#rejects">Rejects</a>
+    <a href="#duplicates">Duplicates</a><a href="#suppliers">Suppliers</a><a href="#dates">Dates</a>
+    <a href="#currency">Currency</a><a href="#before-after">Before and after</a>
+    <a href="#truth">Against ground truth</a><a href="#reconciliation">Reconciliation</a>
+  </nav>
+</header>
+
+<section id="summary">
+  <h2>Summary</h2>
+  <p>42 workbooks, 225 sheets read and
+  6 skipped because they had no table header
+  (inventory_2020.xlsx / Notes, payroll_2017.xlsx / Summary, payroll_2022.xlsx / Summary, purchases_2016.xlsx / Notes, purchases_2020.xlsx / Notes, sales_2023.xlsx / Notes).
+  Every row below a header is accounted for exactly once.</p>
+  <div class="tiles">
+    <div class="tile"><div class="label">Rows in</div><div class="value">21,120</div><div class="sub">below a header</div></div>
+    <div class="tile"><div class="label">Loaded</div><div class="value">18,901</div><div class="sub">89.5% of rows in</div></div>
+    <div class="tile"><div class="label">Duplicates merged</div><div class="value">530</div><div class="sub">exact repeats</div></div>
+    <div class="tile"><div class="label">Rejected</div><div class="value">325</div><div class="sub">with a reason code</div></div>
+    <div class="tile"><div class="label">Layout rows skipped</div><div class="value">1,364</div><div class="sub">blank, subtotal, header</div></div>
+    <div class="tile"><div class="label">Match ground truth</div><div class="value">99.94%</div><div class="sub">21,107 of 21,120 rows</div></div>
+  </div>
+  <p class="small">"Loaded" rows are checked against the core tables, not inferred: each core
+  record stores the book, sheet and row it came from. Loaded rows with no core record:
+  <strong class="ok">0</strong>.</p>
+</section>
+
+<section id="books">
+  <h2>Rows in and out, per book</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Workbook</th><th>Domain</th><th class="num">Sheets</th><th class="num">Rows in</th>
+      <th class="num">Loaded</th><th class="num">Merged</th><th class="num">Rejected</th><th class="num">Skipped</th></tr></thead>
+    <tbody>
+      <tr><td>inventory_2015.xlsx</td><td>inventory</td><td class="num">1</td>
+        <td class="num">778</td><td class="num">721</td>
+        <td class="num">11</td><td class="num">11</td>
+        <td class="num">35</td></tr>
+      <tr><td>inventory_2016.xlsx</td><td>inventory</td><td class="num">2</td>
+        <td class="num">676</td><td class="num">588</td>
+        <td class="num">25</td><td class="num">9</td>
+        <td class="num">54</td></tr>
+      <tr><td>inventory_2017.xlsx</td><td>inventory</td><td class="num">1</td>
+        <td class="num">688</td><td class="num">615</td>
+        <td class="num">36</td><td class="num">6</td>
+        <td class="num">31</td></tr>
+      <tr><td>inventory_2018.xlsx</td><td>inventory</td><td class="num">2</td>
+        <td class="num">765</td><td class="num">669</td>
+        <td class="num">29</td><td class="num">10</td>
+        <td class="num">57</td></tr>
+      <tr><td>inventory_2019.xlsx</td><td>inventory</td><td class="num">1</td>
+        <td class="num">748</td><td class="num">682</td>
+        <td class="num">27</td><td class="num">10</td>
+        <td class="num">29</td></tr>
+      <tr><td>inventory_2020.xlsx</td><td>inventory</td><td class="num">2</td>
+        <td class="num">755</td><td class="num">667</td>
+        <td class="num">28</td><td class="num">6</td>
+        <td class="num">54</td></tr>
+      <tr><td>inventory_2021.xlsx</td><td>inventory</td><td class="num">1</td>
+        <td class="num">723</td><td class="num">654</td>
+        <td class="num">29</td><td class="num">4</td>
+        <td class="num">36</td></tr>
+      <tr><td>inventory_2022.xlsx</td><td>inventory</td><td class="num">2</td>
+        <td class="num">802</td><td class="num">710</td>
+        <td class="num">30</td><td class="num">8</td>
+        <td class="num">54</td></tr>
+      <tr><td>inventory_2023.xlsx</td><td>inventory</td><td class="num">1</td>
+        <td class="num">772</td><td class="num">707</td>
+        <td class="num">27</td><td class="num">4</td>
+        <td class="num">34</td></tr>
+      <tr><td>inventory_2024.xlsx</td><td>inventory</td><td class="num">2</td>
+        <td class="num">800</td><td class="num">717</td>
+        <td class="num">33</td><td class="num">6</td>
+        <td class="num">44</td></tr>
+      <tr><td>item_master.xlsx</td><td>products</td><td class="num">1</td>
+        <td class="num">58</td><td class="num">57</td>
+        <td class="num">1</td><td class="num">0</td>
+        <td class="num">0</td></tr>
+      <tr><td>payroll_2015.xlsx</td><td>payroll</td><td class="num">12</td>
+        <td class="num">273</td><td class="num">241</td>
+        <td class="num">3</td><td class="num">4</td>
+        <td class="num">25</td></tr>
+      <tr><td>payroll_2016.xlsx</td><td>payroll</td><td class="num">12</td>
+        <td class="num">281</td><td class="num">244</td>
+        <td class="num">3</td><td class="num">6</td>
+        <td class="num">28</td></tr>
+      <tr><td>payroll_2017.xlsx</td><td>payroll</td><td class="num">12</td>
+        <td class="num">283</td><td class="num">245</td>
+        <td class="num">6</td><td class="num">3</td>
+        <td class="num">29</td></tr>
+      <tr><td>payroll_2018.xlsx</td><td>payroll</td><td class="num">13</td>
+        <td class="num">320</td><td class="num">259</td>
+        <td class="num">26</td><td class="num">3</td>
+        <td class="num">32</td></tr>
+      <tr><td>payroll_2019.xlsx</td><td>payroll</td><td class="num">12</td>
+        <td class="num">310</td><td class="num">273</td>
+        <td class="num">1</td><td class="num">6</td>
+        <td class="num">30</td></tr>
+      <tr><td>payroll_2020.xlsx</td><td>payroll</td><td class="num">12</td>
+        <td class="num">337</td><td class="num">303</td>
+        <td class="num">3</td><td class="num">3</td>
+        <td class="num">28</td></tr>
+      <tr><td>payroll_2021.xlsx</td><td>payroll</td><td class="num">12</td>
+        <td class="num">336</td><td class="num">304</td>
+        <td class="num">0</td><td class="num">5</td>
+        <td class="num">27</td></tr>
+      <tr><td>payroll_2022.xlsx</td><td>payroll</td><td class="num">12</td>
+        <td class="num">352</td><td class="num">308</td>
+        <td class="num">4</td><td class="num">12</td>
+        <td class="num">28</td></tr>
+      <tr><td>payroll_2023.xlsx</td><td>payroll</td><td class="num">12</td>
+        <td class="num">349</td><td class="num">310</td>
+        <td class="num">2</td><td class="num">9</td>
+        <td class="num">28</td></tr>
+      <tr><td>payroll_2024.xlsx</td><td>payroll</td><td class="num">12</td>
+        <td class="num">345</td><td class="num">306</td>
+        <td class="num">3</td><td class="num">7</td>
+        <td class="num">29</td></tr>
+      <tr><td>purchases_2015.xlsx</td><td>purchases</td><td class="num">1</td>
+        <td class="num">282</td><td class="num">244</td>
+        <td class="num">5</td><td class="num">6</td>
+        <td class="num">27</td></tr>
+      <tr><td>purchases_2016.xlsx</td><td>purchases</td><td class="num">1</td>
+        <td class="num">280</td><td class="num">249</td>
+        <td class="num">3</td><td class="num">2</td>
+        <td class="num">26</td></tr>
+      <tr><td>purchases_2017.xlsx</td><td>purchases</td><td class="num">4</td>
+        <td class="num">283</td><td class="num">245</td>
+        <td class="num">4</td><td class="num">4</td>
+        <td class="num">30</td></tr>
+      <tr><td>purchases_2018.xlsx</td><td>purchases</td><td class="num">4</td>
+        <td class="num">288</td><td class="num">240</td>
+        <td class="num">4</td><td class="num">14</td>
+        <td class="num">30</td></tr>
+      <tr><td>purchases_2019.xlsx</td><td>purchases</td><td class="num">1</td>
+        <td class="num">297</td><td class="num">261</td>
+        <td class="num">3</td><td class="num">8</td>
+        <td class="num">25</td></tr>
+      <tr><td>purchases_2019_revised.xlsx</td><td>purchases</td><td class="num">1</td>
+        <td class="num">80</td><td class="num">1</td>
+        <td class="num">56</td><td class="num">15</td>
+        <td class="num">8</td></tr>
+      <tr><td>purchases_2020.xlsx</td><td>purchases</td><td class="num">4</td>
+        <td class="num">311</td><td class="num">266</td>
+        <td class="num">4</td><td class="num">4</td>
+        <td class="num">37</td></tr>
+      <tr><td>purchases_2021.xlsx</td><td>purchases</td><td class="num">1</td>
+        <td class="num">337</td><td class="num">297</td>
+        <td class="num">10</td><td class="num">4</td>
+        <td class="num">26</td></tr>
+      <tr><td>purchases_2022.xlsx</td><td>purchases</td><td class="num">1</td>
+        <td class="num">340</td><td class="num">302</td>
+        <td class="num">7</td><td class="num">1</td>
+        <td class="num">30</td></tr>
+      <tr><td>purchases_2023.xlsx</td><td>purchases</td><td class="num">2</td>
+        <td class="num">346</td><td class="num">289</td>
+        <td class="num">14</td><td class="num">14</td>
+        <td class="num">29</td></tr>
+      <tr><td>purchases_2024.xlsx</td><td>purchases</td><td class="num">4</td>
+        <td class="num">350</td><td class="num">308</td>
+        <td class="num">6</td><td class="num">6</td>
+        <td class="num">30</td></tr>
+      <tr><td>sales_2015.xlsx</td><td>sales</td><td class="num">12</td>
+        <td class="num">613</td><td class="num">573</td>
+        <td class="num">3</td><td class="num">5</td>
+        <td class="num">32</td></tr>
+      <tr><td>sales_2016.xlsx</td><td>sales</td><td class="num">12</td>
+        <td class="num">684</td><td class="num">638</td>
+        <td class="num">8</td><td class="num">4</td>
+        <td class="num">34</td></tr>
+      <tr><td>sales_2017.xlsx</td><td>sales</td><td class="num">1</td>
+        <td class="num">637</td><td class="num">591</td>
+        <td class="num">9</td><td class="num">6</td>
+        <td class="num">31</td></tr>
+      <tr><td>sales_2018.xlsx</td><td>sales</td><td class="num">4</td>
+        <td class="num">718</td><td class="num">663</td>
+        <td class="num">11</td><td class="num">9</td>
+        <td class="num">35</td></tr>
+      <tr><td>sales_2019.xlsx</td><td>sales</td><td class="num">4</td>
+        <td class="num">844</td><td class="num">793</td>
+        <td class="num">8</td><td class="num">12</td>
+        <td class="num">31</td></tr>
+      <tr><td>sales_2020.xlsx</td><td>sales</td><td class="num">12</td>
+        <td class="num">783</td><td class="num">696</td>
+        <td class="num">5</td><td class="num">42</td>
+        <td class="num">40</td></tr>
+      <tr><td>sales_2021.xlsx</td><td>sales</td><td class="num">1</td>
+        <td class="num">692</td><td class="num">638</td>
+        <td class="num">13</td><td class="num">9</td>
+        <td class="num">32</td></tr>
+      <tr><td>sales_2022.xlsx</td><td>sales</td><td class="num">2</td>
+        <td class="num">740</td><td class="num">683</td>
+        <td class="num">9</td><td class="num">8</td>
+        <td class="num">40</td></tr>
+      <tr><td>sales_2023.xlsx</td><td>sales</td><td class="num">12</td>
+        <td class="num">709</td><td class="num">653</td>
+        <td class="num">10</td><td class="num">10</td>
+        <td class="num">36</td></tr>
+      <tr><td>sales_2024.xlsx</td><td>sales</td><td class="num">4</td>
+        <td class="num">755</td><td class="num">691</td>
+        <td class="num">11</td><td class="num">10</td>
+        <td class="num">43</td></tr>
+    </tbody>
+    <tfoot><tr><td>Total</td><td></td><td></td><td class="num">21,120</td>
+      <td class="num">18,901</td><td class="num">530</td>
+      <td class="num">325</td><td class="num">1,364</td></tr></tfoot>
+  </table></div>
+</section>
+
+<section id="rejects">
+  <h2>Rejected rows, by reason</h2>
+  <p>Rows that could not be loaded safely are kept in <code>etl.rejects</code> with a reason
+  code and the original cells, so someone can fix the source and reload.</p>
+  <svg class="chart" viewBox="0 0 640 346" role="img" aria-label="Rejected rows by reason"><g><title>UNKNOWN_CURRENCY: 56</title><text class="axis-label" x="182" y="16" text-anchor="end">UNKNOWN_CURRENCY</text><path class="bar" d="M190.0,4.0h390.0a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-390.0z"/><text class="value" x="590.0" y="16">56</text></g><g><title>MISSING_FIELD: 43</title><text class="axis-label" x="182" y="42" text-anchor="end">MISSING_FIELD</text><path class="bar" d="M190.0,30.0h298.5a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-298.5z"/><text class="value" x="498.5" y="42">43</text></g><g><title>BAD_QUANTITY: 38</title><text class="axis-label" x="182" y="68" text-anchor="end">BAD_QUANTITY</text><path class="bar" d="M190.0,56.0h263.4a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-263.4z"/><text class="value" x="463.4" y="68">38</text></g><g><title>BAD_DATE: 32</title><text class="axis-label" x="182" y="94" text-anchor="end">BAD_DATE</text><path class="bar" d="M190.0,82.0h221.1a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-221.1z"/><text class="value" x="421.1" y="94">32</text></g><g><title>AMOUNT_MISMATCH: 31</title><text class="axis-label" x="182" y="120" text-anchor="end">AMOUNT_MISMATCH</text><path class="bar" d="M190.0,108.0h214.1a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-214.1z"/><text class="value" x="414.1" y="120">31</text></g><g><title>UNKNOWN_PRODUCT: 31</title><text class="axis-label" x="182" y="146" text-anchor="end">UNKNOWN_PRODUCT</text><path class="bar" d="M190.0,134.0h214.1a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-214.1z"/><text class="value" x="414.1" y="146">31</text></g><g><title>NET_MISMATCH: 25</title><text class="axis-label" x="182" y="172" text-anchor="end">NET_MISMATCH</text><path class="bar" d="M190.0,160.0h171.9a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-171.9z"/><text class="value" x="371.9" y="172">25</text></g><g><title>BAD_AMOUNT: 21</title><text class="axis-label" x="182" y="198" text-anchor="end">BAD_AMOUNT</text><path class="bar" d="M190.0,186.0h143.8a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-143.8z"/><text class="value" x="343.8" y="198">21</text></g><g><title>UNKNOWN_EMPLOYEE: 10</title><text class="axis-label" x="182" y="224" text-anchor="end">UNKNOWN_EMPLOYEE</text><path class="bar" d="M190.0,212.0h66.4a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-66.4z"/><text class="value" x="266.4" y="224">10</text></g><g><title>UNKNOWN_MOVEMENT_TYPE: 10</title><text class="axis-label" x="182" y="250" text-anchor="end">UNKNOWN_MOVEMENT_TYPE</text><path class="bar" d="M190.0,238.0h66.4a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-66.4z"/><text class="value" x="266.4" y="250">10</text></g><g><title>CURRENCY_CONFLICT: 8</title><text class="axis-label" x="182" y="276" text-anchor="end">CURRENCY_CONFLICT</text><path class="bar" d="M190.0,264.0h52.3a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-52.3z"/><text class="value" x="252.3" y="276">8</text></g><g><title>DATE_OUT_OF_RANGE: 3</title><text class="axis-label" x="182" y="302" text-anchor="end">DATE_OUT_OF_RANGE</text><path class="bar" d="M190.0,290.0h17.1a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-17.1z"/><text class="value" x="217.1" y="302">3</text></g><g><title>CONFLICTING_DUPLICATE: 17</title><text class="axis-label" x="182" y="328" text-anchor="end">CONFLICTING_DUPLICATE</text><path class="bar" d="M190.0,316.0h115.6a4.0,4.0 0 0 1 4.0,4.0v6.0a4.0,4.0 0 0 1 -4.0,4.0h-115.6z"/><text class="value" x="315.6" y="328">17</text></g><line class="baseline" x1="190" y1="0" x2="190" y2="346"/></svg>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Reason</th><th>Stage</th><th class="num">Rows</th><th>Examples (book / sheet / row: detail)</th></tr></thead>
+    <tbody>
+      <tr><td><code>UNKNOWN_CURRENCY</code><br><span class="small">No currency in the row, the amount or the header</span></td>
+        <td>parse</td><td class="num">56</td>
+        <td class="small">purchases_2018.xlsx / Q2 / 6: no currency in the row, the amount or the header<br>purchases_2018.xlsx / Q2 / 13: no currency in the row, the amount or the header<br>purchases_2018.xlsx / Q2 / 34: no currency in the row, the amount or the header<br><details><summary>original cells</summary>sku: FAB-KIT-004; date: 43201; amount: 345.1; quantity: 70; supplier: Hill Textiles International Limited; po_number: Po-2018-36; unit_pr...<br>sku: FAB-DEN-002; date: 43213; amount: 978600; quantity: 140; supplier: walker textiles co. ltd; po_number: PO-2018-00032; unit_price: 69...<br>sku: TRM-BTN-002; date: 43230; amount: 72; quantity: 900; supplier: MooreTrims SARL; po_number: po 2018/46; unit_price: 0.08; description...<br></details></td></tr>
+      <tr><td><code>MISSING_FIELD</code><br><span class="small">A required field is blank</span></td>
+        <td>parse</td><td class="num">43</td>
+        <td class="small">inventory_2016.xlsx / Finished goods / 261: voucher number is blank<br>inventory_2018.xlsx / Raw materials / 360: voucher number is blank<br>inventory_2019.xlsx / Stock card / 589: voucher number is blank<br><details><summary>original cells</summary>sku: FGD-SKT-003; date: 31/10/2016; qty_out: 18; reference: Sales Oct 2016; description: Skirt, wrap linen; movement_type: Sales issue<br>sku: FAB-LNG-001; date: 43414; quantity: 120; reference: PO-2018-00102; description: Polyester lining, ivory, 150cm; movement_type: Receipt<br>sku: PKG-TAG-001; date: 10/17/2019; qty_in: 225; reference: PO-2019-00096; description: Swing tag; movement_type: Goods received<br></details></td></tr>
+      <tr><td><code>BAD_QUANTITY</code><br><span class="small">Quantity is zero, negative or not a number</span></td>
+        <td>parse</td><td class="num">38</td>
+        <td class="small">inventory_2015.xlsx / Stock card / 69: both in (38) and out (38) filled<br>inventory_2015.xlsx / Stock card / 120: both in (1) and out (1) filled<br>inventory_2015.xlsx / Stock card / 232: both in (800) and out (800) filled<br><details><summary>original cells</summary>sku: TRM-BTN-003; date: 12/01/2015; qty_in: 38; qty_out: 38; reference: MO-2015-00002; voucher_no: ISS-2015-00004; description: Buttons 1...<br>sku: FGD-TRS-003; date: 31/1/2015; qty_in: 1; qty_out: 1; reference: Sales Jan 2015; voucher_no: SIV-2015-00020; description: Trousers - ...<br>sku: TRM-LBL-001; date: 06/04/2015; qty_in: 800; qty_out: 800; reference: PO-2015-00034; voucher_no: GRN-2015-00072; description: Woven b...<br></details></td></tr>
+      <tr><td><code>BAD_DATE</code><br><span class="small">Date cannot be read or does not exist (e.g. 31/02)</span></td>
+        <td>parse</td><td class="num">32</td>
+        <td class="small">inventory_2015.xlsx / Stock card / 103: date &#39;30/02/2015&#39;<br>inventory_2015.xlsx / Stock card / 646: date &#39;31/02/2015&#39;<br>inventory_2015.xlsx / Stock card / 720: date &#39;??/03/2015&#39;<br><details><summary>original cells</summary>sku: FGD-DRS-001; date: 30/02/2015; qty_out: 15; reference: Sales Jan 2015; voucher_no: SIV-2015-00003; description: Dress, wrap kitenge;...<br>sku: FGD-SHT-004; date: 31/02/2015; qty_out: 15; reference: Sales Oct 2015; voucher_no: SIV-2015-00155; description: Shirt denim overshir...<br>sku: PKG-TAG-001; date: ??/03/2015; qty_in: 500; reference: PO-2015-00114; voucher_no: GRN-2015-00224; description: Swing tag; movement_t...<br></details></td></tr>
+      <tr><td><code>AMOUNT_MISMATCH</code><br><span class="small">Amount is not quantity times unit price</span></td>
+        <td>parse</td><td class="num">31</td>
+        <td class="small">purchases_2017.xlsx / Q1 / 36: 500 x 160 = 80000, book says 99432<br>purchases_2018.xlsx / Q4 / 47: 70 x 3.06 = 214.20, book says 290.9<br>purchases_2019.xlsx / Purchases / 56: 230 x 3.02 = 694.60, book says 876.85<br><details><summary>original cells</summary>sku: PKG-PLY-001; date: 2017-02-19T00:00:00; amount: 99432; currency: RF; quantity: 500; supplier: Rogers &amp; Sons Print and Pack Limited; ...<br>sku: fab-cot-001; date: 43428; amount: 290.9; currency: US$; quantity: 70; supplier: Hill Textiles International Limited; po_number: po 2...<br>sku: FABCOT001; date: 03/12/2019; amount: 876.85; currency: USD; quantity: 230; supplier: Hill Textile International; po_number: PO/2019/...<br></details></td></tr>
+      <tr><td><code>UNKNOWN_PRODUCT</code><br><span class="small">Product code or description is not in the item master</span></td>
+        <td>load</td><td class="num">31</td>
+        <td class="small">inventory_2015.xlsx / Stock card / 23: TRM-ZZZ-974 is not in the item master<br>inventory_2015.xlsx / Stock card / 741: FAB-ZZZ-936 is not in the item master<br>inventory_2016.xlsx / Raw materials / 155: FAB-ZZZ-950 is not in the item master<br><details><summary>original cells</summary>sku: TRM-ZZZ-974; date: 01/01/2015; qty_in: 300; reference: Opening balance; voucher_no: ADJ-2015-00019; description: Zip, 20cm white; mo...<br>sku: FAB-ZZZ-936; date: 20/12/2015; qty_in: 90; reference: PO-2015-00109; voucher_no: GRN-2015-00216; description: Cotton twill, khaki, 1...<br>sku: FAB-ZZZ-950; date: 28/05/2016; qty_out: 57.5; reference: MO-2016-00030; voucher_no: Iss-2016-59; description: cotton poplin, sky blu...<br></details></td></tr>
+      <tr><td><code>NET_MISMATCH</code><br><span class="small">Net pay is not gross minus deductions</span></td>
+        <td>parse</td><td class="num">25</td>
+        <td class="small">payroll_2015.xlsx / Apr 2015 / 16: 430000 - 51600 != 388400<br>payroll_2015.xlsx / Jun 2015 / 14: 155000 - 18600 != 146400<br>payroll_2015.xlsx / Jul 2015 / 6: 115000 - 13800 != 111200<br><details><summary>original cells</summary>net: 388400; name: George Daniel; gross: 430000; position: Accountant; deductions: 51600; employee_code: E012<br>net: 146400; name: Joseph Zuniga; gross: 155000; position: Machinist; deductions: 18600; employee_code: E010<br>net: 111200; name: Maria Montgomery; gross: 115000; position: Machinist; deductions: 13800; employee_code: E002<br></details></td></tr>
+      <tr><td><code>BAD_AMOUNT</code><br><span class="small">Amount is not a number or is not positive</span></td>
+        <td>parse</td><td class="num">21</td>
+        <td class="small">payroll_2016.xlsx / SEP-16 / 17: not an amount: &#39;TBC&#39;<br>payroll_2016.xlsx / NOV-16 / 5: not an amount: &#39;TBC&#39;<br>payroll_2020.xlsx / Nov 2020 / 21: not an amount: &#39;see HR file&#39;<br><details><summary>original cells</summary>net: 118,800; name: GRAY Frank; gross: TBC; position: Machinist; deductions: 16,200; employee_code: E013<br>net: 105,600; name: MONTGOMERY Maria; gross: TBC; position: Machinist; deductions: 14,400; employee_code: E002<br>net: 182160; name: Robin Ellis; gross: see HR file; position: Tailor; deductions: 24840; employee_code: 22<br></details></td></tr>
+      <tr><td><code>UNKNOWN_EMPLOYEE</code><br><span class="small">No employee number and the name matches no employee</span></td>
+        <td>load</td><td class="num">10</td>
+        <td class="small">payroll_2015.xlsx / Oct 2015 / 27: no employee number; 0 employees named &#39;Benjamin Horton&#39;<br>payroll_2016.xlsx / FEB-16 / 26: no employee number; 0 employees named &#39;FORD Douglas&#39;<br>payroll_2017.xlsx / 2017-10 / 24: no employee number; 0 employees named &#39;Mcguire, Emily&#39;<br><details><summary>original cells</summary>net: 79200; name: Benjamin Horton; gross: 90000; position: Casual; deductions: 10800<br>net: 101,200; name: FORD Douglas; gross: 115,000; position: Casual; deductions: 13,800<br>net: 83600; name: Mcguire, Emily; gross: 95000; position: Casual; deductions: 11400<br></details></td></tr>
+      <tr><td><code>UNKNOWN_MOVEMENT_TYPE</code><br><span class="small">Stock movement type is not recognised</span></td>
+        <td>parse</td><td class="num">10</td>
+        <td class="small">inventory_2015.xlsx / Stock card / 343: movement type &#39;XFER&#39;<br>inventory_2016.xlsx / Raw materials / 338: movement type &#39;??&#39;<br>inventory_2018.xlsx / Raw materials / 44: movement type &#39;??&#39;<br><details><summary>original cells</summary>sku: FGD-SKT-002; date: 31/05/2015; qty_out: 16; reference: Sales May 2015; voucher_no: SIV-2015-00077; description: Skirt, pencil twill;...<br>sku: PKG-BOX-001; date: 19/12/2016; qty_in: 350; reference: PO-2016-00106; voucher_no: GRN-2016-00190; description: Gift box; movement_ty...<br>sku: FAB-TWL-003; date: 43124; quantity: -135.5; reference: MO-2018-00006; voucher_no: ISS-2018-00011; description: Cotton twill, charcoa...<br></details></td></tr>
+      <tr><td><code>CURRENCY_CONFLICT</code><br><span class="small">Currency column and amount text disagree</span></td>
+        <td>parse</td><td class="num">8</td>
+        <td class="small">purchases_2019.xlsx / Purchases / 160: column says RWF, amount says USD<br>purchases_2024.xlsx / Q2 / 46: column says USD, amount says RWF<br>sales_2017.xlsx / Sales / 405: column says USD, amount says RWF<br><details><summary>original cells</summary>sku: FAB-KIT-004; date: 07/22/19; amount: $729.00; currency: RWF; quantity: 150; supplier: Hill Textiles International Limited; po_number...<br>sku: FAB-COT-001; date: 2024-05-22T00:00:00; amount: 549,600 Frw; currency: USD; quantity: 120; supplier: Doyle Cloth Merchants; po_numbe...<br>sku: FGD-JKT-001; date: 2017-08-05T00:00:00; amount: 293,800 Frw; channel: Retail; currency: $; quantity: 2; receipt_no: RCT-2017-00290; ...<br></details></td></tr>
+      <tr><td><code>DATE_OUT_OF_RANGE</code><br><span class="small">Date falls outside the book&#39;s period</span></td>
+        <td>parse</td><td class="num">3</td>
+        <td class="small">purchases_2015.xlsx / Purchases / 107: date &#39;20/05/2051&#39;<br>purchases_2015.xlsx / Purchases / 248: date &#39;06/11/2051&#39;<br>purchases_2024.xlsx / Q1 / 57: date &#39;2042-02-26 00:00:00&#39;<br><details><summary>original cells</summary>date: 20/05/2051; amount: 619,200/=; quantity: 80; supplier: Gonzalez Fabric House Ltd.; po_number: PO-2015-00037; description: Linen ble...<br>date: 06/11/2051; amount: 1,164,600/=; quantity: 180; supplier: Gonzalez Fabric House Ltd; po_number: PO-2015-00098; description: Denim 1...<br>sku: SRV-MNT-001; date: 2042-02-26T00:00:00; amount: 135100; currency: RF; quantity: 1; supplier: Miller Engineering Services Internation...<br></details></td></tr>
+      <tr><td><code>CONFLICTING_DUPLICATE</code><br><span class="small">Same document line keyed twice with different values</span></td>
+        <td>load</td><td class="num">17</td>
+        <td class="small">purchases_2016.xlsx / Purchases / 5: PO-2015-00105 / paper carrier bag differs from purchases_2015.xlsx sheet 0 row 280<br>purchases_2016.xlsx / Purchases / 6: PO-2015-00105 / gift box differs from purchases_2015.xlsx sheet 0 row 281<br>purchases_2019_revised.xlsx / Q4 re-keyed / 21: PO-2019-00097 / FAB-DEN-002 differs from purchases_2019.xlsx sheet 0 row 235<br><details><summary>original cells</summary>date: 29/12/2015; amount: 43,000; quantity: 100; supplier: ANBOTT PRINT AND PACK C; po_number: PO-2015-00105; description: PAPER CARRIER BAG<br>date: 29/12/2015; amount: 365,000; quantity: 250; supplier: ANBOTT PRINT AND PACK C; po_number: PO-2015-00105; description: GIFT BOX<br>sku: FAB-DEN-002; date: 24/10/2019; amount: Frw 825,000; quantity: 110; supplier: Waalker Txtls Co. Ltd; po_number: PO-2019-00097; unit_p...<br></details></td></tr>
+    </tbody>
+  </table></div>
+  <h3>Layout rows skipped</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Reason</th><th class="num">Rows</th></tr></thead>
+    <tbody><tr><td><code>BLANK_ROW</code> <span class="small">Empty row inside the table</span></td><td class="num">719</td></tr><tr><td><code>SUBTOTAL_ROW</code> <span class="small">Subtotal or grand-total line typed into the table</span></td><td class="num">642</td></tr><tr><td><code>REPEATED_HEADER</code> <span class="small">Header row pasted again further down the sheet</span></td><td class="num">3</td></tr></tbody>
+  </table></div>
+</section>
+
+<section id="duplicates">
+  <h2>Duplicates merged</h2>
+  <p>Each domain has a natural key (PO number and product, receipt and product, voucher number,
+  month and employee, SKU). Rows are ranked within each key with
+  <code>row_number() over (partition by key order by book, sheet, row)</code>; the first is
+  kept. Later rows with identical values are merged into it. Later rows with different values
+  are rejected as <code>CONFLICTING_DUPLICATE</code>, because two clerks disagreeing is a
+  question for a person.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Domain</th><th>Where the copy was</th><th class="num">Rows merged</th></tr></thead>
+    <tbody><tr><td>inventory</td><td>another workbook</td><td class="num">210</td></tr><tr><td>inventory</td><td>same sheet</td><td class="num">65</td></tr><tr><td>payroll</td><td>same sheet</td><td class="num">29</td></tr><tr><td>payroll</td><td>same workbook, another sheet</td><td class="num">22</td></tr><tr><td>products</td><td>same sheet</td><td class="num">1</td></tr><tr><td>purchases</td><td>another workbook</td><td class="num">84</td></tr><tr><td>purchases</td><td>same sheet</td><td class="num">32</td></tr><tr><td>sales</td><td>another workbook</td><td class="num">26</td></tr><tr><td>sales</td><td>same sheet</td><td class="num">61</td></tr></tbody>
+  </table></div>
+  <h3>Examples</h3>
+  <ul class="small">
+    <li>another workbook: <code>GRN-2015-00221</code> in inventory_2016.xlsx / Raw materials / row 5
+      merged into inventory_2015.xlsx / Stock card / row 758</li>
+    <li>same sheet: <code>GRN-2015-00012</code> in inventory_2015.xlsx / Stock card / row 78
+      merged into inventory_2015.xlsx / Stock card / row 74</li>
+    <li>same workbook, another sheet: <code>2018-12 / E002</code> in payroll_2018.xlsx / December (2) / row 4
+      merged into payroll_2018.xlsx / December / row 4</li>
+  </ul>
+</section>
+
+<section id="suppliers">
+  <h2>Supplier reconciliation</h2>
+  <p>192 distinct supplier spellings in the purchase books were
+  collapsed into 50 suppliers. The ground truth has
+  30. The matcher is deliberately conservative: a wrong merge
+  folds two suppliers' payables together and is hard to spot later, while a missed merge leaves
+  a duplicate supplier that can be merged in the ERP afterwards.</p>
+  <div class="tiles">
+    <div class="tile"><div class="label">Pairwise precision</div><div class="value">1.000</div><div class="sub">439 of 439 merged pairs correct</div></div>
+    <div class="tile"><div class="label">Pairwise recall</div><div class="value">0.758</div><div class="sub">439 of 579 true pairs found</div></div>
+    <div class="tile"><div class="label">Wrong merges</div><div class="value">0</div><div class="sub">suppliers holding two true suppliers</div></div>
+    <div class="tile"><div class="label">Review queue</div><div class="value">23</div><div class="sub">21 are true matches</div></div>
+  </div>
+  <h3>How spellings were matched</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th class="num">Spellings</th><th class="num">Purchase rows</th></tr></thead>
+    <tbody><tr><td>exact</td><td class="num">50</td><td class="num">1,588</td></tr><tr><td>fuzzy</td><td class="num">45</td><td class="num">393</td></tr><tr><td>normalized</td><td class="num">97</td><td class="num">861</td></tr></tbody>
+  </table></div>
+  <p class="small"><strong>exact</strong>: the supplier's most common spelling;
+  <strong>normalized</strong>: same key after rules (case, punctuation, "&amp;"/"and", legal forms,
+  abbreviations); <strong>fuzzy</strong>: rapidfuzz score at or above the auto-merge threshold.</p>
+  <h3>Suppliers with the most spellings</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Canonical name</th><th class="num">Spellings</th><th class="num">Rows</th><th>Spellings, most used first</th></tr></thead>
+    <tbody><tr><td>Herrera Engineering Services Ltd</td><td class="num">9</td><td class="num">92</td><td class="small">Herrera Engineering Services Ltd | Herrera Enginerring Services Ltd | Herrera Engineering Services - Ltd | HERRERA ENGINERRING SERVICES LTD | HERRERA ENGINEERING SERVICES LTD | Herrera Engineering Services Ltd. | HERRERA ENGINEERINGSERVICES LTD | Herrera Engineering Ser | Herrera EngineeringServices Ltd</td></tr><tr><td>Henderson Fabric House Co. Ltd</td><td class="num">9</td><td class="num">65</td><td class="small">Henderson Fabric House Co. Ltd | Henderson Fabric Hous | Henderson Fabirc House, | Henderson Fabric House- Co. Ltd | HENDERSON FABRIC HOUSE CO. LTD | Hendderson Fabric House Co. Ltd | HENDERSON FABRIC HOUSE- CO. LTD | Henderson Fabric House Company | Hnderson Fabric House</td></tr><tr><td>Peterson Accessories SARL</td><td class="num">8</td><td class="num">141</td><td class="small">Peterson Accessories SARL | Peterson Accessories S.A.R.L | Peterson Acceessori | Peterson Acc. SARL | PETERSON ACCESSORIES S.A.R.L | PETERSON ACCESSORIES SARL | PETERSON ACCEESSORI | PETERSON ACC. SARL</td></tr><tr><td>Johnson Textiles Limited</td><td class="num">8</td><td class="num">128</td><td class="small">Johnson Textiles Limited | JohnsonTextiles Ltd | Joohnson Textile Limited | Johnson Texti | Johnson Textile Ltd. | JOHNSON TEXTILES LIMITED | JohnsoTextiles Limited | Johnson Textile Ltd</td></tr><tr><td>Roman Engineering Services SARL</td><td class="num">8</td><td class="num">112</td><td class="small">Roman Engineering Services SARL | Roman Engineering Servi | Roman Engineering Services | ROMAN ENGINEERING SERVICES SARL | Roman Engineering Services S.A.R.L | ROMAN ENGINEERING SERVI | ROMAN ENGINEERING SERVICES | ROMAN ENGINEERING SERVICES S.A.R.L</td></tr><tr><td>Wolfe &amp; Sons Trims Ltd</td><td class="num">8</td><td class="num">90</td><td class="small">Wolfe &amp; Sons Trims Ltd | wolfe &amp; sons trims ltd. | Wolfe &amp;Sons Trims Ltd | WOLFE &amp; SONS TRIMS LTD | Wolfe &amp; Sons Trim | WOLFE &amp; SONS TRIMS LTD. | WOLFE &amp;SONS TRIMS LTD | WOLFE &amp; SONS TRIM</td></tr><tr><td>Hill Textiles International Limited</td><td class="num">7</td><td class="num">174</td><td class="small">Hill Textiles International Limited | Hill Textile International | Hill Textiles International | Hill Textile International Ltd | HILL TEXTILE INTERNATIONAL | HILL TEXTILES INTERNATIONAL LIMITED | HILL TEXTILE INTERNATIONAL LTD</td></tr><tr><td>Bernard Haberdashery International Limited</td><td class="num">7</td><td class="num">74</td><td class="small">Bernard Haberdashery International Limited | Bernard Haberdashery International - Limited | Bernrd Haberdashery International, Limited | Bernard Haaberdashery International Limited | Bernard HaberdasheryInternational Ltd. | Bernard HaberdasheryInetrnational, Limited | BERNARD HABERDASHERY INTERNATIONAL LIMITED</td></tr></tbody>
+  </table></div>
+  <h3>Errors against the ground truth</h3>
+<p>No wrong merges.</p>  <details><summary>15 true suppliers still split across more than one record</summary>
+    <ul class="small"><li>Abbott Print and Pack Co. Ltd: Abbott Print and Pack Co. Ltd (78 rows); Anbott Print and Pack C (68 rows); Abboyt Print and Pack Ltd (25 rows)</li><li>Doyla Cloth Merchants Co. Ltd: Doyla Cloth Merchants Co. Ltd (58 rows); Doyla Cloth Merchants C (4 rows)</li><li>Doyle Cloth Merchants Limited: Doyle Cloth Merchants Limited (39 rows); Doyle Cloth Merchants L (4 rows)</li><li>Fowler &amp; Sons Cloth Merchants SARL: Fowler &amp; Sons Cloth Merchants SARL (22 rows); Folwer &amp; Sons Cloth Merchants (4 rows)</li><li>Herrera Engineering Services Ltd: Herrera Engineering Services Ltd (92 rows); Herrwra Engg Services, Ltd (20 rows)</li><li>Miller Fabrics Limited: Miller Fabrics Limited (112 rows); Millwr Fabs Limited (15 rows); Miller Fabrics L (1 rows)</li><li>Munoz Print and Pack Co. Ltd: Munoz Print and Pack Co. Ltd (14 rows); Munoz Printand Pack Co. Limited (3 rows)</li><li>Pacheco &amp; Sons Haberdashery Ltd: Pacheco &amp; Sons Haberdashery Ltd (66 rows); Pachceo &amp; Sons Haberdashers Limited (1 rows)</li><li>Robinson &amp; Sons Cloth Merchants Limited: Robinson &amp; Sons Cloth Merchants Limited (34 rows); Robnisoon &amp; Sons Cloth Merchants Ltd (7 rows)</li><li>Rogers &amp; Sons Print and Pack Limited: Rogers &amp; Sons Print and Pack Limited (107 rows); ROGERS &amp; SONSPRINT ANDPACK LIMITED (6 rows); Rogers &amp; Sons Print an (5 rows)</li><li>Shaffer &amp; Sons Trims Co. Ltd: Shaffer &amp; Sons Trims Co. Ltd (99 rows); Shaffrr &amp; Sons Trims C. (11 rows)</li><li>Wagner Textiles SARL: Wagner Textiles SARL (86 rows); Wagnre Textiles (22 rows)</li><li>Walker Packaging Ltd: Walker Packaging Ltd (59 rows); Walekr Packaging Ltd (19 rows); Wlker Packin (6 rows)</li><li>Walker Textiles Co. Ltd: Walker Textiles Co. Ltd (154 rows); Waalker Txtls Co. Ltd (19 rows)</li><li>Wolfe &amp; Sons Trims Ltd: Wolfe &amp; Sons Trims Ltd (90 rows); Wolfe&amp; Sons Trims L (32 rows); Wolfe &amp; Sosn Trims Ltd. (9 rows)</li></ul>
+  </details>
+  <h3>Review queue</h3>
+  <p>Spellings whose best score fell between the review threshold
+  (73) and the auto-merge threshold
+  (88) are not merged; they are listed for a person to confirm.
+  The last column uses the ground truth and is not available to the pipeline.</p>
+  <details><summary>Show 23 candidates</summary>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Spelling</th><th>Nearest supplier</th><th class="num">Score</th><th>Same supplier in truth</th></tr></thead>
+    <tbody><tr><td>Herrwra Engg Services, Ltd</td><td>Herrera Engineering Services Ltd</td><td class="num">85.7</td><td>yes</td></tr><tr><td>Miller Fabrics L</td><td>Miller Fabrics Limited</td><td class="num">85.7</td><td>yes</td></tr><tr><td>Pachceo &amp; Sons Haberdashers Limited</td><td>Pacheco &amp; Sons Haberdashery Ltd</td><td class="num">85.7</td><td>yes</td></tr><tr><td>Waalker Txtls Co. Ltd</td><td>Walker Textiles Co. Ltd</td><td class="num">85.7</td><td>yes</td></tr><tr><td>Wlker Packin</td><td>Walker Packaging Ltd</td><td class="num">85.7</td><td>yes</td></tr><tr><td>Abboyt Print and Pack Ltd</td><td>Abbott Print and Pack Co. Ltd</td><td class="num">83.3</td><td>yes</td></tr><tr><td>ABBOYT PRINT AND PACK LTD</td><td>Abbott Print and Pack Co. Ltd</td><td class="num">83.3</td><td>yes</td></tr><tr><td>Doyla Cloth Merchants C</td><td>Doyla Cloth Merchants Co. Ltd</td><td class="num">83.3</td><td>yes</td></tr><tr><td>Doyle Cloth Merchants L</td><td>Doyle Cloth Merchants Limited</td><td class="num">83.3</td><td>yes</td></tr><tr><td>Folwer &amp; Sons Cloth Merchants</td><td>Fowler &amp; Sons Cloth Merchants SARL</td><td class="num">83.3</td><td>yes</td></tr><tr><td>Wagnre Textiles</td><td>Wagner Textiles SARL</td><td class="num">83.3</td><td>yes</td></tr><tr><td>WAGNRE TEXTILES</td><td>Wagner Textiles SARL</td><td class="num">83.3</td><td>yes</td></tr><tr><td>Walekr Packaging Ltd</td><td>Walker Packaging Ltd</td><td class="num">83.3</td><td>yes</td></tr><tr><td>Wolfe&amp; Sons Trims L</td><td>Wolfe &amp; Sons Trims Ltd</td><td class="num">83.3</td><td>yes</td></tr><tr><td>WOLFE&amp; SONS TRIMS L</td><td>Wolfe &amp; Sons Trims Ltd</td><td class="num">83.3</td><td>yes</td></tr><tr><td>Robnisoon &amp; Sons Cloth Merchants Ltd</td><td>Robinson &amp; Sons Cloth Merchants Limited</td><td class="num">82.3</td><td>yes</td></tr><tr><td>Doyle Cloth Merchants</td><td>Doyla Cloth Merchants Co. Ltd</td><td class="num">80.0</td><td>no</td></tr><tr><td>Doyle Cloth Merchants Limited</td><td>Doyla Cloth Merchants Co. Ltd</td><td class="num">80.0</td><td>no</td></tr><tr><td>Millwr Fabs Limited</td><td>Miller Fabrics Limited</td><td class="num">80.0</td><td>yes</td></tr><tr><td>MILLWR FABS LIMITED</td><td>Miller Fabrics Limited</td><td class="num">80.0</td><td>yes</td></tr><tr><td>Rogers &amp; Sons Print an</td><td>Rogers &amp; Sons Print and Pack Limited</td><td class="num">80.0</td><td>yes</td></tr><tr><td>Shaffrr &amp; Sons Trims C.</td><td>Shaffer &amp; Sons Trims Co. Ltd</td><td class="num">75.0</td><td>yes</td></tr><tr><td>SHAFFRR &amp; SONS TRIMS C.</td><td>Shaffer &amp; Sons Trims Co. Ltd</td><td class="num">75.0</td><td>yes</td></tr></tbody>
+  </table></div>
+  </details>
+  <h3>How the thresholds were chosen</h3>
+  <p>The thresholds were calibrated on spellings generated from five other seeds
+  (101, 202, 303, 404, 505), never on the seed this report scores. The auto-merge
+  threshold is the one with the highest recall among those with pooled precision of at least
+  0.99; the review threshold is the lowest 5-point score band where at least half of the
+  suggestions are right. Calibration picked 88 and
+  73; the matcher is configured with
+  88 and 73.</p>
+  <div class="legend"><span><span class="key s1"></span>Precision</span><span><span class="key s2"></span>Recall</span></div>
+  <svg class="chart" viewBox="0 0 640 300" role="img" aria-label="Precision and recall by auto-merge threshold"><line class="grid" x1="44" x2="548" y1="264.0" y2="264.0"/><text class="axis-label" x="38" y="268.0" text-anchor="end">0.00</text><line class="grid" x1="44" x2="548" y1="206.5" y2="206.5"/><text class="axis-label" x="38" y="210.5" text-anchor="end">0.25</text><line class="grid" x1="44" x2="548" y1="149.0" y2="149.0"/><text class="axis-label" x="38" y="153.0" text-anchor="end">0.50</text><line class="grid" x1="44" x2="548" y1="91.5" y2="91.5"/><text class="axis-label" x="38" y="95.5" text-anchor="end">0.75</text><line class="grid" x1="44" x2="548" y1="34.0" y2="34.0"/><text class="axis-label" x="38" y="38.0" text-anchor="end">1.00</text><text class="axis-label" x="44.0" y="282" text-anchor="middle">70</text><text class="axis-label" x="128.0" y="282" text-anchor="middle">75</text><text class="axis-label" x="212.0" y="282" text-anchor="middle">80</text><text class="axis-label" x="296.0" y="282" text-anchor="middle">85</text><text class="axis-label" x="380.0" y="282" text-anchor="middle">90</text><text class="axis-label" x="464.0" y="282" text-anchor="middle">95</text><text class="axis-label" x="548.0" y="282" text-anchor="middle">100</text><text class="axis-label" x="296.0" y="296" text-anchor="middle">auto-merge threshold</text><line class="marker" x1="346.4" x2="346.4" y1="28" y2="264"/><text class="value" x="351.4" y="24">chosen: 88</text><polyline class="line s1" points="44.0,65.8 60.8,62.7 77.6,62.2 94.4,54.5 111.2,54.5 128.0,54.5 144.8,54.3 161.6,54.4 178.4,54.4 195.2,54.4 212.0,54.4 228.8,51.6 245.6,47.9 262.4,48.1 279.2,42.7 296.0,42.8 312.8,40.5 329.6,40.6 346.4,34.0 363.2,34.0 380.0,34.0 396.8,34.0 413.6,34.0 430.4,34.0 447.2,34.0 464.0,34.0 480.8,34.0 497.6,34.0 514.4,34.0 531.2,34.0 548.0,34.0"/><circle class="dot s1" cx="548.0" cy="34.0" r="4"/><text class="value" x="558.0" y="38.0">Precision</text><polyline class="line s2" points="44.0,43.5 60.8,43.4 77.6,44.4 94.4,46.8 111.2,47.4 128.0,47.4 144.8,49.9 161.6,50.5 178.4,51.3 195.2,51.3 212.0,51.3 228.8,61.9 245.6,62.9 262.4,64.4 279.2,75.0 296.0,78.0 312.8,81.5 329.6,82.6 346.4,89.2 363.2,102.6 380.0,105.7 396.8,112.8 413.6,116.6 430.4,127.5 447.2,136.2 464.0,146.3 480.8,151.8 497.6,162.4 514.4,171.7 531.2,173.6 548.0,173.6"/><circle class="dot s2" cx="548.0" cy="173.6" r="4"/><text class="value" x="558.0" y="177.6">Recall</text><rect class="hit" x="35.6" y="34" width="16.8" height="230"><title>threshold 70: precision 0.862, recall 0.958</title></rect><rect class="hit" x="52.4" y="34" width="16.8" height="230"><title>threshold 71: precision 0.875, recall 0.959</title></rect><rect class="hit" x="69.2" y="34" width="16.8" height="230"><title>threshold 72: precision 0.877, recall 0.955</title></rect><rect class="hit" x="86.0" y="34" width="16.8" height="230"><title>threshold 73: precision 0.911, recall 0.944</title></rect><rect class="hit" x="102.8" y="34" width="16.8" height="230"><title>threshold 74: precision 0.911, recall 0.942</title></rect><rect class="hit" x="119.6" y="34" width="16.8" height="230"><title>threshold 75: precision 0.911, recall 0.942</title></rect><rect class="hit" x="136.4" y="34" width="16.8" height="230"><title>threshold 76: precision 0.912, recall 0.931</title></rect><rect class="hit" x="153.2" y="34" width="16.8" height="230"><title>threshold 77: precision 0.911, recall 0.928</title></rect><rect class="hit" x="170.0" y="34" width="16.8" height="230"><title>threshold 78: precision 0.911, recall 0.925</title></rect><rect class="hit" x="186.8" y="34" width="16.8" height="230"><title>threshold 79: precision 0.911, recall 0.925</title></rect><rect class="hit" x="203.6" y="34" width="16.8" height="230"><title>threshold 80: precision 0.911, recall 0.925</title></rect><rect class="hit" x="220.4" y="34" width="16.8" height="230"><title>threshold 81: precision 0.924, recall 0.879</title></rect><rect class="hit" x="237.2" y="34" width="16.8" height="230"><title>threshold 82: precision 0.939, recall 0.874</title></rect><rect class="hit" x="254.0" y="34" width="16.8" height="230"><title>threshold 83: precision 0.939, recall 0.868</title></rect><rect class="hit" x="270.8" y="34" width="16.8" height="230"><title>threshold 84: precision 0.962, recall 0.822</title></rect><rect class="hit" x="287.6" y="34" width="16.8" height="230"><title>threshold 85: precision 0.962, recall 0.809</title></rect><rect class="hit" x="304.4" y="34" width="16.8" height="230"><title>threshold 86: precision 0.972, recall 0.794</title></rect><rect class="hit" x="321.2" y="34" width="16.8" height="230"><title>threshold 87: precision 0.971, recall 0.789</title></rect><rect class="hit" x="338.0" y="34" width="16.8" height="230"><title>threshold 88: precision 1.000, recall 0.760</title></rect><rect class="hit" x="354.8" y="34" width="16.8" height="230"><title>threshold 89: precision 1.000, recall 0.702</title></rect><rect class="hit" x="371.6" y="34" width="16.8" height="230"><title>threshold 90: precision 1.000, recall 0.688</title></rect><rect class="hit" x="388.4" y="34" width="16.8" height="230"><title>threshold 91: precision 1.000, recall 0.657</title></rect><rect class="hit" x="405.2" y="34" width="16.8" height="230"><title>threshold 92: precision 1.000, recall 0.641</title></rect><rect class="hit" x="422.0" y="34" width="16.8" height="230"><title>threshold 93: precision 1.000, recall 0.593</title></rect><rect class="hit" x="438.8" y="34" width="16.8" height="230"><title>threshold 94: precision 1.000, recall 0.556</title></rect><rect class="hit" x="455.6" y="34" width="16.8" height="230"><title>threshold 95: precision 1.000, recall 0.512</title></rect><rect class="hit" x="472.4" y="34" width="16.8" height="230"><title>threshold 96: precision 1.000, recall 0.488</title></rect><rect class="hit" x="489.2" y="34" width="16.8" height="230"><title>threshold 97: precision 1.000, recall 0.442</title></rect><rect class="hit" x="506.0" y="34" width="16.8" height="230"><title>threshold 98: precision 1.000, recall 0.401</title></rect><rect class="hit" x="522.8" y="34" width="16.8" height="230"><title>threshold 99: precision 1.000, recall 0.393</title></rect><rect class="hit" x="539.6" y="34" width="16.8" height="230"><title>threshold 100: precision 1.000, recall 0.393</title></rect></svg>
+  <details><summary>Threshold sweep as a table</summary>
+  <div class="table-wrap"><table>
+    <thead><tr><th class="num">Threshold</th><th class="num">Precision</th><th class="num">Recall</th><th class="num">F1</th></tr></thead>
+    <tbody><tr><td class="num">70</td><td class="num">0.8618</td><td class="num">0.9585</td><td class="num">0.9076</td></tr><tr><td class="num">72</td><td class="num">0.8773</td><td class="num">0.9546</td><td class="num">0.9143</td></tr><tr><td class="num">74</td><td class="num">0.9107</td><td class="num">0.9417</td><td class="num">0.9260</td></tr><tr><td class="num">76</td><td class="num">0.9116</td><td class="num">0.9307</td><td class="num">0.9210</td></tr><tr><td class="num">78</td><td class="num">0.9111</td><td class="num">0.9250</td><td class="num">0.9180</td></tr><tr><td class="num">80</td><td class="num">0.9111</td><td class="num">0.9250</td><td class="num">0.9180</td></tr><tr><td class="num">82</td><td class="num">0.9394</td><td class="num">0.8745</td><td class="num">0.9057</td></tr><tr><td class="num">84</td><td class="num">0.9623</td><td class="num">0.8216</td><td class="num">0.8864</td></tr><tr><td class="num">86</td><td class="num">0.9716</td><td class="num">0.7935</td><td class="num">0.8736</td></tr><tr><td class="num">87</td><td class="num">0.9714</td><td class="num">0.7886</td><td class="num">0.8705</td></tr><tr><td class="num">88 (chosen)</td><td class="num">1.0000</td><td class="num">0.7600</td><td class="num">0.8636</td></tr><tr><td class="num">89</td><td class="num">1.0000</td><td class="num">0.7017</td><td class="num">0.8247</td></tr><tr><td class="num">90</td><td class="num">1.0000</td><td class="num">0.6883</td><td class="num">0.8154</td></tr><tr><td class="num">92</td><td class="num">1.0000</td><td class="num">0.6409</td><td class="num">0.7811</td></tr><tr><td class="num">94</td><td class="num">1.0000</td><td class="num">0.5556</td><td class="num">0.7143</td></tr><tr><td class="num">96</td><td class="num">1.0000</td><td class="num">0.4880</td><td class="num">0.6559</td></tr><tr><td class="num">98</td><td class="num">1.0000</td><td class="num">0.4011</td><td class="num">0.5726</td></tr><tr><td class="num">100</td><td class="num">1.0000</td><td class="num">0.3931</td><td class="num">0.5644</td></tr></tbody>
+  </table></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Score band (review suggestions)</th><th class="num">Suggestions</th><th class="num">Right</th></tr></thead>
+    <tbody><tr><td>83 to 88</td><td class="num">94</td><td class="num">74</td></tr><tr><td>78 to 83</td><td class="num">51</td><td class="num">38</td></tr><tr><td>73 to 78</td><td class="num">11</td><td class="num">11</td></tr><tr><td>68 to 73</td><td class="num">15</td><td class="num">5</td></tr><tr><td>63 to 68</td><td class="num">19</td><td class="num">9</td></tr><tr><td>58 to 63</td><td class="num">18</td><td class="num">5</td></tr><tr><td>53 to 58</td><td class="num">38</td><td class="num">2</td></tr></tbody>
+  </table></div>
+  </details>
+</section>
+
+<section id="dates">
+  <h2>Dates</h2>
+  <p>Books mix real Excel dates, serial numbers, ISO text, text months and slashed dates
+  typed day-first or month-first. A slashed date with a part above 12 settles the convention
+  for its sheet; ambiguous values take the sheet's convention, then the workbook's, then are
+  resolved from neighbouring rows when a sheet mixes both (books are in date order), and are
+  otherwise rejected as <code>AMBIGUOUS_DATE</code>. Dates outside the book's year (plus 62 days)
+  are rejected as <code>DATE_OUT_OF_RANGE</code>.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>How the date was read</th><th class="num">Rows</th><th class="num">Correct vs truth</th></tr></thead>
+    <tbody><tr><td><code>day_first</code></td><td class="num">3,332</td><td class="num">3,332</td></tr><tr><td><code>excel_date</code></td><td class="num">3,196</td><td class="num">3,196</td></tr><tr><td><code>iso</code></td><td class="num">3,141</td><td class="num">3,141</td></tr><tr><td><code>sheet_convention</code></td><td class="num">2,092</td><td class="num">2,092</td></tr><tr><td><code>text_month</code></td><td class="num">1,647</td><td class="num">1,647</td></tr><tr><td><code>excel_serial</code></td><td class="num">1,616</td><td class="num">1,616</td></tr><tr><td><code>month_first</code></td><td class="num">1,191</td><td class="num">1,191</td></tr><tr><td><code>same_day_month</code></td><td class="num">249</td><td class="num">249</td></tr><tr><td><code>neighbours</code></td><td class="num">113</td><td class="num">113</td></tr></tbody>
+    <tfoot><tr><td>Total parsed</td><td class="num">16,577</td><td class="num">16,577</td></tr></tfoot>
+  </table></div>
+</section>
+
+<section id="currency">
+  <h2>Amounts and currencies</h2>
+  <p>A currency column wins; otherwise a marker inside the amount text ("$1,250.00",
+  "125,000 Frw"); otherwise the column header ("Amount (Frw)"). A currency column that
+  contradicts the amount text is <code>CURRENCY_CONFLICT</code>; no currency at all is
+  <code>UNKNOWN_CURRENCY</code>. USD amounts are converted with <code>core.fx_rates</code>, a
+  synthetic table generated by a formula (1000 RWF per USD in January 2015, plus
+  5 per month). It is not market data.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Currency</th><th>Where it came from</th><th class="num">Purchase and sales rows</th></tr></thead>
+    <tbody><tr><td>RWF</td><td>column</td><td class="num">5,552</td></tr><tr><td>RWF</td><td>embedded</td><td class="num">1,523</td></tr><tr><td>RWF</td><td>header</td><td class="num">828</td></tr><tr><td>USD</td><td>column</td><td class="num">1,188</td></tr><tr><td>USD</td><td>embedded</td><td class="num">466</td></tr></tbody>
+  </table></div>
+  <p>Amount and currency both match the truth for 9,557 of
+  9,557 parsed rows.</p>
+</section>
+
+<section id="before-after">
+  <h2>Before and after</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Domain</th><th class="num">Rows in</th><th class="num">Data rows</th><th>Core table</th><th class="num">Records loaded</th><th class="num">Expected (truth)</th></tr></thead>
+    <tbody><tr><td>purchases</td><td class="num">3,194</td><td class="num">2,896</td><td><code>core.purchase_order_lines</code></td><td class="num">2,702</td><td class="num">2,702</td></tr><tr><td>sales</td><td class="num">7,175</td><td class="num">6,821</td><td><code>core.sales</code></td><td class="num">6,619</td><td class="num">6,619</td></tr><tr><td>inventory</td><td class="num">7,507</td><td class="num">7,079</td><td><code>core.inventory_movements</code></td><td class="num">6,730</td><td class="num">6,730</td></tr><tr><td>payroll</td><td class="num">3,186</td><td class="num">2,902</td><td><code>core.payroll_lines</code></td><td class="num">2,793</td><td class="num">2,793</td></tr><tr><td>products</td><td class="num">58</td><td class="num">58</td><td><code>core.products</code></td><td class="num">57</td><td class="num">57</td></tr></tbody>
+  </table></div>
+  <h3>Core table row counts</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Table</th><th class="num">Rows</th></tr></thead>
+    <tbody><tr><td><code>core.products</code></td><td class="num">57</td></tr><tr><td><code>core.suppliers</code></td><td class="num">50</td></tr><tr><td><code>core.supplier_aliases</code></td><td class="num">192</td></tr><tr><td><code>core.fx_rates</code></td><td class="num">288</td></tr><tr><td><code>core.purchase_orders</code></td><td class="num">1,283</td></tr><tr><td><code>core.purchase_order_lines</code></td><td class="num">2,702</td></tr><tr><td><code>core.sales</code></td><td class="num">6,619</td></tr><tr><td><code>core.inventory_movements</code></td><td class="num">6,730</td></tr><tr><td><code>core.employees</code></td><td class="num">35</td></tr><tr><td><code>core.payroll_runs</code></td><td class="num">120</td></tr><tr><td><code>core.payroll_lines</code></td><td class="num">2,793</td></tr></tbody>
+  </table></div>
+  <h3>Load runs</h3>
+  <p>Every core table is loaded with <code>INSERT ... ON CONFLICT DO UPDATE</code> that only
+  updates rows whose values changed, and counts its own inserts and updates with PostgreSQL 18's
+  <code>RETURNING old/new</code>. Loading the same books again changes nothing.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th class="num">Run</th><th class="num">Rows in</th><th class="num">Core rows inserted</th><th class="num">Core rows updated</th></tr></thead>
+    <tbody><tr><td class="num">1</td><td class="num">21,120</td><td class="num">20,869</td><td class="num">0</td></tr><tr><td class="num">2</td><td class="num">21,120</td><td class="num">0</td><td class="num">0</td></tr></tbody>
+  </table></div>
+</section>
+
+<section id="truth">
+  <h2>Against the ground truth</h2>
+  <p>The generator records what should happen to every row: load it, merge it, skip it, or
+  reject it with a given reason. 21,107 of 21,120 rows
+  (99.94%) got exactly that outcome and reason.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Expected</th><th>Pipeline did</th><th class="num">Rows</th><th>Example (book, sheet, row)</th></tr></thead>
+    <tbody><tr><td>merged</td><td>rejected CONFLICTING_DUPLICATE</td><td class="num">13</td><td class="small">purchases_2016.xlsx, 0, 5</td></tr></tbody>
+  </table></div>
+  <p class="small">A copy of a purchase-order line re-keyed with a supplier spelling the matcher
+  did not merge looks like a different supplier, so it is held as a conflicting duplicate
+  instead of being merged. Better supplier recall would remove these.</p>
+</section>
+
+<section id="reconciliation">
+  <h2>Reconciliation checks</h2>
+  <p>The checks a month-end close depends on, run as SQL over the loaded tables
+  (<code>src/erp_migration/sql/report/</code>).</p>
+  <h3>Goods received against purchase orders</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Status</th><th class="num">Order lines</th></tr></thead>
+    <tbody><tr><td>Received in full</td><td class="num">2,179</td></tr><tr><td>Short delivery</td><td class="num">83</td></tr><tr><td>Received, but the order line did not load</td><td class="num">44</td></tr><tr><td>Ordered, no receipt loaded</td><td class="num">31</td></tr></tbody>
+  </table></div>
+  <h3>Products whose running stock balance goes negative</h3>
+  <p class="small">Running balance per product with <code>sum(...) over (partition by product order by date)</code>.
+  The generated (true) books never go negative, so each line here is caused by a movement that
+  was rejected or missing.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>SKU</th><th>Description</th><th>First negative</th><th class="num">Balance that day</th><th class="num">Days negative</th></tr></thead>
+    <tbody><tr><td>FAB-COT-004</td><td>Cotton poplin, sky blue, 150cm</td><td>2022-06-10</td><td class="num">-38.80</td><td class="num">2</td></tr><tr><td>FAB-TWL-003</td><td>Cotton twill, charcoal, 150cm</td><td>2017-08-22</td><td class="num">-38.80</td><td class="num">1</td></tr><tr><td>TRM-ZIP-002</td><td>Zip, 20cm white</td><td>2015-06-02</td><td class="num">-71.00</td><td class="num">23</td></tr></tbody>
+  </table></div>
+  <h3>Sales book against the stock card (units per product per month)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Status</th><th class="num">Product-months</th></tr></thead>
+    <tbody><tr><td>Agree</td><td class="num">1,989</td></tr><tr><td>Quantities differ</td><td class="num">102</td></tr><tr><td>In the sales book only</td><td class="num">24</td></tr><tr><td>On the stock card only</td><td class="num">4</td></tr></tbody>
+  </table></div>
+  <h3>Year totals in RWF (synthetic)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Year</th><th class="num">Purchases</th><th class="num">Sales</th><th class="num">of which export</th><th class="num">Payroll (gross)</th><th class="num">Avg headcount</th></tr></thead>
+    <tbody><tr><td>2015</td><td class="num">108,726,521</td><td class="num">176,609,392</td><td class="num">75,038,592</td><td class="num">56,070,000</td><td class="num">20.1</td></tr><tr><td>2016</td><td class="num">106,297,269</td><td class="num">182,420,365</td><td class="num">54,605,965</td><td class="num">58,335,000</td><td class="num">20.3</td></tr><tr><td>2017</td><td class="num">117,781,656</td><td class="num">208,068,895</td><td class="num">89,126,095</td><td class="num">62,315,000</td><td class="num">20.4</td></tr><tr><td>2018</td><td class="num">114,100,971</td><td class="num">230,669,556</td><td class="num">87,433,656</td><td class="num">68,080,000</td><td class="num">21.6</td></tr><tr><td>2019</td><td class="num">142,716,614</td><td class="num">287,796,102</td><td class="num">103,847,402</td><td class="num">76,053,000</td><td class="num">22.8</td></tr><tr><td>2020</td><td class="num">146,117,304</td><td class="num">240,072,601</td><td class="num">97,608,401</td><td class="num">83,616,000</td><td class="num">25.3</td></tr><tr><td>2021</td><td class="num">155,990,189</td><td class="num">237,983,580</td><td class="num">75,930,980</td><td class="num">87,070,000</td><td class="num">25.3</td></tr><tr><td>2022</td><td class="num">175,465,200</td><td class="num">324,510,911</td><td class="num">143,648,911</td><td class="num">94,225,000</td><td class="num">25.7</td></tr><tr><td>2023</td><td class="num">178,574,138</td><td class="num">260,813,158</td><td class="num">87,419,258</td><td class="num">99,339,000</td><td class="num">25.8</td></tr><tr><td>2024</td><td class="num">174,610,294</td><td class="num">272,718,225</td><td class="num">83,042,325</td><td class="num">101,471,000</td><td class="num">25.5</td></tr></tbody>
+  </table></div>
+</section>
+
+<footer>
+  <p>Reproduce: <code>make demo</code> in the repository (Python 3.11+ and Docker). The run
+  generates the books with seed 42, starts PostgreSQL 18, loads the books twice
+  and writes this page, <code>docs/metrics.json</code> and the results table in the README.</p>
+</footer>
+</main>
+</body>
+</html>

@@ -1,11 +1,19 @@
-# Generate books (`make data`), start PostgreSQL (`make db`), load them (`make etl`).
+# One-command demo: `make demo` (needs Docker and Python 3.11+).
 PYTHON ?= python3.11
 VENV := .venv
 PY := $(VENV)/bin/python
 DATABASE_URL ?= postgresql://erp:erp@localhost:54329/erp
 export DATABASE_URL
 
-.PHONY: install db data etl calibrate test lint format db-down db-reset
+.PHONY: demo install db data etl report calibrate test lint format db-down db-reset
+
+demo: install ## fresh database, generate books, load twice (second load is a no-op), report
+	docker compose down -v --remove-orphans
+	docker compose up -d --wait db
+	$(PY) -m erp_migration generate
+	$(PY) -m erp_migration etl
+	$(PY) -m erp_migration etl
+	$(PY) -m erp_migration report
 
 $(VENV)/.installed: pyproject.toml
 	$(PYTHON) -m venv $(VENV)
@@ -23,6 +31,9 @@ data: install ## write synthetic workbooks and ground truth to data/
 
 etl: install ## load data/books into PostgreSQL
 	$(PY) -m erp_migration etl
+
+report: install ## write docs/index.html and refresh the README results block
+	$(PY) -m erp_migration report
 
 calibrate: install ## print the supplier-matching threshold sweep
 	$(PY) -m erp_migration calibrate

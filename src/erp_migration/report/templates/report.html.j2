@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ERP Migration Data Quality</title>
+<meta name="description" content="Data-quality report for a synthetic Excel-to-PostgreSQL ERP migration: rows in and loaded per book, duplicates merged, rejects by reason, supplier reconciliation scored against ground truth.">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #6f6e69;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --ok: #006300;
+  --warn: #9a3412;
+  --code-bg: #f0efec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #a3a29b;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --s1: #3987e5;
+    --s2: #d95926;
+    --ok: #0ca30c;
+    --warn: #ec835a;
+    --code-bg: #262624;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #a3a29b;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --s1: #3987e5;
+  --s2: #d95926;
+  --ok: #0ca30c;
+  --warn: #ec835a;
+  --code-bg: #262624;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 28px; line-height: 1.2; margin: 4px 0 12px; }
+h2 { font-size: 20px; margin: 0 0 8px; }
+h3 { font-size: 15px; margin: 20px 0 6px; }
+p { margin: 8px 0; color: var(--ink-2); }
+a { color: var(--s1); }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.eyebrow { text-transform: uppercase; letter-spacing: 0.06em; font-size: 12px; color: var(--muted); margin: 0; }
+.notice { border: 1px solid var(--border); border-left: 3px solid var(--s2); background: var(--surface);
+          padding: 10px 14px; border-radius: 6px; color: var(--ink); }
+section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+          padding: 20px; margin-top: 20px; }
+nav { margin: 16px 0 0; font-size: 14px; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+.tile { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.tile .label { font-size: 13px; color: var(--ink-2); }
+.tile .value { font-size: 22px; font-weight: 600; }
+.tile .sub { font-size: 12px; color: var(--muted); }
+.table-wrap { overflow-x: auto; margin: 8px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tfoot td { font-weight: 600; border-bottom: none; }
+.small { font-size: 12.5px; color: var(--ink-2); }
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.chart { width: 100%; max-width: 720px; height: auto; display: block; margin: 8px 0; }
+.chart text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+.chart .axis-label { fill: var(--muted); }
+.chart .value { fill: var(--ink); }
+.chart .bar { fill: var(--s1); }
+.chart .baseline { stroke: var(--axis); stroke-width: 1; }
+.chart .grid { stroke: var(--grid); stroke-width: 1; }
+.chart .marker { stroke: var(--ink-2); stroke-width: 1; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .line.s1 { stroke: var(--s1); }
+.chart .line.s2 { stroke: var(--s2); }
+.chart .dot { stroke: var(--surface); stroke-width: 2; }
+.chart .dot.s1 { fill: var(--s1); }
+.chart .dot.s2 { fill: var(--s2); }
+.chart .hit { fill: transparent; }
+.legend { display: flex; gap: 16px; font-size: 13px; color: var(--ink-2); margin-top: 8px; }
+.key { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 6px; }
+.key.s1 { background: var(--s1); }
+.key.s2 { background: var(--s2); }
+details { margin-top: 6px; }
+summary { cursor: pointer; color: var(--ink-2); font-size: 13.5px; }
+footer { margin-top: 24px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <p class="eyebrow">erp-migration-demo</p>
+  <h1>Data-quality report</h1>
+  <p class="notice">Synthetic data. This reconstructs the approach used to migrate a fashion
+  manufacturer's Excel books into a normalized PostgreSQL schema. It is not DIKAM Fashion's
+  production code or data: every supplier, product, employee and amount here was generated
+  (seed {{ metrics.seed }}, books for {{ metrics.years }}), and every number on this page was
+  computed by <code>make demo</code>, not typed.</p>
+  <nav>
+    <a href="#summary">Summary</a><a href="#books">Per book</a><a href="#rejects">Rejects</a>
+    <a href="#duplicates">Duplicates</a><a href="#suppliers">Suppliers</a><a href="#dates">Dates</a>
+    <a href="#currency">Currency</a><a href="#before-after">Before and after</a>
+    <a href="#truth">Against ground truth</a><a href="#reconciliation">Reconciliation</a>
+  </nav>
+</header>
+
+<section id="summary">
+  <h2>Summary</h2>
+  <p>{{ metrics.workbooks }} workbooks, {{ metrics.sheets_read }} sheets read and
+  {{ metrics.sheets_skipped }} skipped because they had no table header
+  ({% for s in skipped_sheets %}{{ s.book }} / {{ s.sheet }}{{ ", " if not loop.last }}{% endfor %}).
+  Every row below a header is accounted for exactly once.</p>
+  <div class="tiles">
+    <div class="tile"><div class="label">Rows in</div><div class="value">{{ totals.rows_in|n }}</div><div class="sub">below a header</div></div>
+    <div class="tile"><div class="label">Loaded</div><div class="value">{{ totals.loaded|n }}</div><div class="sub">{{ pct(totals.loaded, totals.rows_in, 1) }} of rows in</div></div>
+    <div class="tile"><div class="label">Duplicates merged</div><div class="value">{{ totals.merged|n }}</div><div class="sub">exact repeats</div></div>
+    <div class="tile"><div class="label">Rejected</div><div class="value">{{ totals.rejected|n }}</div><div class="sub">with a reason code</div></div>
+    <div class="tile"><div class="label">Layout rows skipped</div><div class="value">{{ totals.skipped|n }}</div><div class="sub">blank, subtotal, header</div></div>
+    <div class="tile"><div class="label">Match ground truth</div><div class="value">{{ pct(outcome_score.agree, outcome_score.rows) }}</div><div class="sub">{{ outcome_score.agree|n }} of {{ outcome_score.rows|n }} rows</div></div>
+  </div>
+  <p class="small">"Loaded" rows are checked against the core tables, not inferred: each core
+  record stores the book, sheet and row it came from. Loaded rows with no core record:
+  <strong class="{{ 'ok' if totals.not_found_in_core == 0 else 'warn' }}">{{ totals.not_found_in_core|n }}</strong>.</p>
+</section>
+
+<section id="books">
+  <h2>Rows in and out, per book</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Workbook</th><th>Domain</th><th class="num">Sheets</th><th class="num">Rows in</th>
+      <th class="num">Loaded</th><th class="num">Merged</th><th class="num">Rejected</th><th class="num">Skipped</th></tr></thead>
+    <tbody>
+    {% for b in per_book %}
+      <tr><td>{{ b.book }}</td><td>{{ b.domain }}</td><td class="num">{{ b.sheets }}</td>
+        <td class="num">{{ b.rows_in|n }}</td><td class="num">{{ b.loaded|n }}</td>
+        <td class="num">{{ b.merged|n }}</td><td class="num">{{ b.rejected|n }}</td>
+        <td class="num">{{ b.skipped|n }}</td></tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td>Total</td><td></td><td></td><td class="num">{{ totals.rows_in|n }}</td>
+      <td class="num">{{ totals.loaded|n }}</td><td class="num">{{ totals.merged|n }}</td>
+      <td class="num">{{ totals.rejected|n }}</td><td class="num">{{ totals.skipped|n }}</td></tr></tfoot>
+  </table></div>
+</section>
+
+<section id="rejects">
+  <h2>Rejected rows, by reason</h2>
+  <p>Rows that could not be loaded safely are kept in <code>etl.rejects</code> with a reason
+  code and the original cells, so someone can fix the source and reload.</p>
+  {{ reject_chart|safe }}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Reason</th><th>Stage</th><th class="num">Rows</th><th>Examples (book / sheet / row: detail)</th></tr></thead>
+    <tbody>
+    {% for r in reasons %}
+      <tr><td><code>{{ r.code }}</code><br><span class="small">{{ r.description }}</span></td>
+        <td>{{ r.stage }}</td><td class="num">{{ r.n|n }}</td>
+        <td class="small">{% for e in r.examples %}{{ e.book }} / {{ e.sheet }} / {{ e.row_num }}{% if e.detail %}: {{ e.detail }}{% endif %}<br>{% endfor %}
+          {% if r.examples %}<details><summary>original cells</summary>{% for e in r.examples %}{{ e.cells_text }}<br>{% endfor %}</details>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <h3>Layout rows skipped</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Reason</th><th class="num">Rows</th></tr></thead>
+    <tbody>{% for r in noise_reasons %}<tr><td><code>{{ r.code }}</code> <span class="small">{{ r.description }}</span></td><td class="num">{{ r.n|n }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section id="duplicates">
+  <h2>Duplicates merged</h2>
+  <p>Each domain has a natural key (PO number and product, receipt and product, voucher number,
+  month and employee, SKU). Rows are ranked within each key with
+  <code>row_number() over (partition by key order by book, sheet, row)</code>; the first is
+  kept. Later rows with identical values are merged into it. Later rows with different values
+  are rejected as <code>CONFLICTING_DUPLICATE</code>, because two clerks disagreeing is a
+  question for a person.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Domain</th><th>Where the copy was</th><th class="num">Rows merged</th></tr></thead>
+    <tbody>{% for m in merged_where %}<tr><td>{{ m.domain }}</td><td>{{ m.location }}</td><td class="num">{{ m.n|n }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <h3>Examples</h3>
+  <ul class="small">
+  {% for e in merged_examples %}
+    <li>{{ e.location }}: <code>{{ e.natural_key }}</code> in {{ e.book }} / {{ e.sheet }} / row {{ e.row_num }}
+      merged into {{ e.kept_book }} / {{ e.kept_sheet }} / row {{ e.kept_row_num }}</li>
+  {% endfor %}
+  </ul>
+</section>
+
+<section id="suppliers">
+  <h2>Supplier reconciliation</h2>
+  <p>{{ supplier_score.spellings }} distinct supplier spellings in the purchase books were
+  collapsed into {{ supplier_score.clusters }} suppliers. The ground truth has
+  {{ supplier_score.true_suppliers }}. The matcher is deliberately conservative: a wrong merge
+  folds two suppliers' payables together and is hard to spot later, while a missed merge leaves
+  a duplicate supplier that can be merged in the ERP afterwards.</p>
+  <div class="tiles">
+    <div class="tile"><div class="label">Pairwise precision</div><div class="value">{{ "%.3f"|format(supplier_score.scores.precision) }}</div><div class="sub">{{ supplier_score.scores.correct_pairs|n }} of {{ supplier_score.scores.predicted_pairs|n }} merged pairs correct</div></div>
+    <div class="tile"><div class="label">Pairwise recall</div><div class="value">{{ "%.3f"|format(supplier_score.scores.recall) }}</div><div class="sub">{{ supplier_score.scores.correct_pairs|n }} of {{ supplier_score.scores.true_pairs|n }} true pairs found</div></div>
+    <div class="tile"><div class="label">Wrong merges</div><div class="value">{{ supplier_score.false_merges|length }}</div><div class="sub">suppliers holding two true suppliers</div></div>
+    <div class="tile"><div class="label">Review queue</div><div class="value">{{ supplier_score.review_total }}</div><div class="sub">{{ supplier_score.review_correct }} are true matches</div></div>
+  </div>
+  <h3>How spellings were matched</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Method</th><th class="num">Spellings</th><th class="num">Purchase rows</th></tr></thead>
+    <tbody>{% for m in matches_by_method %}<tr><td>{{ m.method }}</td><td class="num">{{ m.spellings|n }}</td><td class="num">{{ m.rows|n }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="small"><strong>exact</strong>: the supplier's most common spelling;
+  <strong>normalized</strong>: same key after rules (case, punctuation, "&amp;"/"and", legal forms,
+  abbreviations); <strong>fuzzy</strong>: rapidfuzz score at or above the auto-merge threshold.</p>
+  <h3>Suppliers with the most spellings</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Canonical name</th><th class="num">Spellings</th><th class="num">Rows</th><th>Spellings, most used first</th></tr></thead>
+    <tbody>{% for s in top_suppliers %}<tr><td>{{ s.canonical }}</td><td class="num">{{ s.spellings }}</td><td class="num">{{ s.rows|n }}</td><td class="small">{{ s.aliases }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <h3>Errors against the ground truth</h3>
+  {% if supplier_score.false_merges %}
+  <p>Wrong merges (different suppliers combined):</p>
+  <ul class="small">{% for f in supplier_score.false_merges %}<li>{{ f.canonical }}: {{ f.true_suppliers|join("; ") }}</li>{% endfor %}</ul>
+  {% else %}<p>No wrong merges.</p>{% endif %}
+  <details><summary>{{ supplier_score.split_suppliers|length }} true suppliers still split across more than one record</summary>
+    <ul class="small">{% for s in supplier_score.split_suppliers %}<li>{{ s.true_name }}: {{ s.clusters|join("; ") }}</li>{% endfor %}</ul>
+  </details>
+  <h3>Review queue</h3>
+  <p>Spellings whose best score fell between the review threshold
+  ({{ calibration.review_threshold }}) and the auto-merge threshold
+  ({{ calibration.auto_threshold }}) are not merged; they are listed for a person to confirm.
+  The last column uses the ground truth and is not available to the pipeline.</p>
+  <details><summary>Show {{ review|length }} candidates</summary>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Spelling</th><th>Nearest supplier</th><th class="num">Score</th><th>Same supplier in truth</th></tr></thead>
+    <tbody>{% for r in review %}<tr><td>{{ r.alias }}</td><td>{{ r.nearest_canonical }}</td><td class="num">{{ "%.1f"|format(r.score) }}</td><td>{{ "yes" if r.same_in_truth else "no" }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  </details>
+  <h3>How the thresholds were chosen</h3>
+  <p>The thresholds were calibrated on spellings generated from five other seeds
+  ({{ calibration.seeds|join(", ") }}), never on the seed this report scores. The auto-merge
+  threshold is the one with the highest recall among those with pooled precision of at least
+  0.99; the review threshold is the lowest 5-point score band where at least half of the
+  suggestions are right. Calibration picked {{ calibration.auto_threshold }} and
+  {{ calibration.review_threshold }}; the matcher is configured with
+  {{ configured[0]|int }} and {{ configured[1]|int }}.</p>
+  <div class="legend"><span><span class="key s1"></span>Precision</span><span><span class="key s2"></span>Recall</span></div>
+  {{ sweep_chart|safe }}
+  <details><summary>Threshold sweep as a table</summary>
+  <div class="table-wrap"><table>
+    <thead><tr><th class="num">Threshold</th><th class="num">Precision</th><th class="num">Recall</th><th class="num">F1</th></tr></thead>
+    <tbody>{% for r in sweep_rows %}<tr><td class="num">{{ r.threshold }}{{ " (chosen)" if r.threshold == calibration.auto_threshold }}</td><td class="num">{{ "%.4f"|format(r.scores.precision) }}</td><td class="num">{{ "%.4f"|format(r.scores.recall) }}</td><td class="num">{{ "%.4f"|format(r.scores.f1) }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Score band (review suggestions)</th><th class="num">Suggestions</th><th class="num">Right</th></tr></thead>
+    <tbody>{% for b in calibration.review_bands %}<tr><td>{{ b.low }} to {{ b.low + 5 }}</td><td class="num">{{ b.suggestions }}</td><td class="num">{{ b.correct }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  </details>
+</section>
+
+<section id="dates">
+  <h2>Dates</h2>
+  <p>Books mix real Excel dates, serial numbers, ISO text, text months and slashed dates
+  typed day-first or month-first. A slashed date with a part above 12 settles the convention
+  for its sheet; ambiguous values take the sheet's convention, then the workbook's, then are
+  resolved from neighbouring rows when a sheet mixes both (books are in date order), and are
+  otherwise rejected as <code>AMBIGUOUS_DATE</code>. Dates outside the book's year (plus 62 days)
+  are rejected as <code>DATE_OUT_OF_RANGE</code>.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>How the date was read</th><th class="num">Rows</th><th class="num">Correct vs truth</th></tr></thead>
+    <tbody>{% for m, checked, correct in date_score.by_method %}<tr><td><code>{{ m }}</code></td><td class="num">{{ checked|n }}</td><td class="num">{{ correct|n }}</td></tr>{% endfor %}</tbody>
+    <tfoot><tr><td>Total parsed</td><td class="num">{{ date_score.checked|n }}</td><td class="num">{{ date_score.correct|n }}</td></tr></tfoot>
+  </table></div>
+  {% if date_score.example_errors %}<p class="small warn">{{ date_score.example_errors|join("; ") }}</p>{% endif %}
+</section>
+
+<section id="currency">
+  <h2>Amounts and currencies</h2>
+  <p>A currency column wins; otherwise a marker inside the amount text ("$1,250.00",
+  "125,000 Frw"); otherwise the column header ("Amount (Frw)"). A currency column that
+  contradicts the amount text is <code>CURRENCY_CONFLICT</code>; no currency at all is
+  <code>UNKNOWN_CURRENCY</code>. USD amounts are converted with <code>core.fx_rates</code>, a
+  synthetic table generated by a formula ({{ fx.base }} RWF per USD in January 2015, plus
+  {{ fx.step }} per month). It is not market data.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Currency</th><th>Where it came from</th><th class="num">Purchase and sales rows</th></tr></thead>
+    <tbody>{% for c in currency_sources %}<tr><td>{{ c.currency }}</td><td>{{ c.currency_source }}</td><td class="num">{{ c.n|n }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p>Amount and currency both match the truth for {{ amount_score.correct|n }} of
+  {{ amount_score.checked|n }} parsed rows.</p>
+  {% if amount_score.example_errors %}<p class="small warn">{{ amount_score.example_errors|join("; ") }}</p>{% endif %}
+</section>
+
+<section id="before-after">
+  <h2>Before and after</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Domain</th><th class="num">Rows in</th><th class="num">Data rows</th><th>Core table</th><th class="num">Records loaded</th><th class="num">Expected (truth)</th></tr></thead>
+    <tbody>{% for d in before_after %}<tr><td>{{ d.domain }}</td><td class="num">{{ d.rows_in|n }}</td><td class="num">{{ d.data_rows|n }}</td><td><code>{{ d.target }}</code></td><td class="num">{{ d.loaded|n }}</td><td class="num">{{ d.expected|n }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <h3>Core table row counts</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Table</th><th class="num">Rows</th></tr></thead>
+    <tbody>{% for t, n in core_counts.items() %}<tr><td><code>{{ t }}</code></td><td class="num">{{ n|n }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <h3>Load runs</h3>
+  <p>Every core table is loaded with <code>INSERT ... ON CONFLICT DO UPDATE</code> that only
+  updates rows whose values changed, and counts its own inserts and updates with PostgreSQL 18's
+  <code>RETURNING old/new</code>. Loading the same books again changes nothing.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th class="num">Run</th><th class="num">Rows in</th><th class="num">Core rows inserted</th><th class="num">Core rows updated</th></tr></thead>
+    <tbody>{% for r in runs %}<tr><td class="num">{{ r.run_id }}</td><td class="num">{{ r.rows_in|n }}</td><td class="num">{{ r.inserted|n }}</td><td class="num">{{ r.updated|n }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section id="truth">
+  <h2>Against the ground truth</h2>
+  <p>The generator records what should happen to every row: load it, merge it, skip it, or
+  reject it with a given reason. {{ outcome_score.agree|n }} of {{ outcome_score.rows|n }} rows
+  ({{ pct(outcome_score.agree, outcome_score.rows) }}) got exactly that outcome and reason.</p>
+  {% if outcome_score.disagreements %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Expected</th><th>Pipeline did</th><th class="num">Rows</th><th>Example (book, sheet, row)</th></tr></thead>
+    <tbody>{% for d in outcome_score.disagreements %}<tr><td>{{ d.expected }}</td><td>{{ d.actual }}</td><td class="num">{{ d.count|n }}</td><td class="small">{{ d.example[0] }}, {{ d.example[1] }}, {{ d.example[2] }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="small">A copy of a purchase-order line re-keyed with a supplier spelling the matcher
+  did not merge looks like a different supplier, so it is held as a conflicting duplicate
+  instead of being merged. Better supplier recall would remove these.</p>
+  {% endif %}
+</section>
+
+<section id="reconciliation">
+  <h2>Reconciliation checks</h2>
+  <p>The checks a month-end close depends on, run as SQL over the loaded tables
+  (<code>src/erp_migration/sql/report/</code>).</p>
+  <h3>Goods received against purchase orders</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Status</th><th class="num">Order lines</th></tr></thead>
+    <tbody>{% for r in recon.receipts %}<tr><td>{{ r.status }}</td><td class="num">{{ r.lines|n }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <h3>Products whose running stock balance goes negative</h3>
+  <p class="small">Running balance per product with <code>sum(...) over (partition by product order by date)</code>.
+  The generated (true) books never go negative, so each line here is caused by a movement that
+  was rejected or missing.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>SKU</th><th>Description</th><th>First negative</th><th class="num">Balance that day</th><th class="num">Days negative</th></tr></thead>
+    <tbody>{% for r in recon.negative_stock %}<tr><td>{{ r.sku }}</td><td>{{ r.description }}</td><td>{{ r.first_negative_date }}</td><td class="num">{{ r.balance_that_day }}</td><td class="num">{{ r.days_negative }}</td></tr>{% else %}<tr><td colspan="5">None</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <h3>Sales book against the stock card (units per product per month)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Status</th><th class="num">Product-months</th></tr></thead>
+    <tbody>{% for r in recon.sales_vs_card %}<tr><td>{{ r.status }}</td><td class="num">{{ r.product_months|n }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <h3>Year totals in RWF (synthetic)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Year</th><th class="num">Purchases</th><th class="num">Sales</th><th class="num">of which export</th><th class="num">Payroll (gross)</th><th class="num">Avg headcount</th></tr></thead>
+    <tbody>{% for r in recon.yearly %}<tr><td>{{ r.year }}</td><td class="num">{{ r.purchases_rwf|money }}</td><td class="num">{{ r.sales_rwf|money }}</td><td class="num">{{ r.export_sales_rwf|money }}</td><td class="num">{{ r.payroll_gross_rwf|money }}</td><td class="num">{{ r.avg_headcount }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<footer>
+  <p>Reproduce: <code>make demo</code> in the repository (Python 3.11+ and Docker). The run
+  generates the books with seed {{ metrics.seed }}, starts PostgreSQL 18, loads the books twice
+  and writes this page, <code>docs/metrics.json</code> and the results table in the README.</p>
+</footer>
+</main>
+</body>
+</html>

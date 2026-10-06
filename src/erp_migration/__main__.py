@@ -1,4 +1,4 @@
-"""Command line: python -m erp_migration {generate,etl,calibrate}."""
+"""Command line: python -m erp_migration {generate,etl,report,calibrate}."""
 
 from __future__ import annotations
 
@@ -46,6 +46,18 @@ def cmd_etl(args: argparse.Namespace) -> None:
         print(f"  {table:28} inserted {c['inserted']:6}  updated {c['updated']:6}")
 
 
+def cmd_report(args: argparse.Namespace) -> None:
+    from erp_migration.etl.db import connect
+    from erp_migration.report.build import build_report
+
+    with connect(args.database_url) as conn:
+        written = build_report(
+            conn, _paths(args).truth, Path(args.out), Path(args.readme) if args.readme else None
+        )
+    for path in written:
+        print(f"wrote {path}")
+
+
 def cmd_calibrate(args: argparse.Namespace) -> None:
     from erp_migration.matching.calibrate import calibrate
 
@@ -71,6 +83,14 @@ def main(argv: list[str] | None = None) -> int:
     e = sub.add_parser("etl", help="load the workbooks into PostgreSQL")
     e.add_argument("--database-url", default=database_url())
     e.set_defaults(func=cmd_etl)
+
+    r = sub.add_parser("report", help="write the data-quality report from the last load")
+    r.add_argument("--database-url", default=database_url())
+    r.add_argument("--out", default="docs/index.html")
+    r.add_argument(
+        "--readme", default="README.md", help="README whose results block is refreshed ('' to skip)"
+    )
+    r.set_defaults(func=cmd_report)
 
     c = sub.add_parser("calibrate", help="print the supplier-matching threshold sweep")
     c.set_defaults(func=cmd_calibrate)

@@ -1,6 +1,6 @@
 """Tests against a real PostgreSQL 18 (testcontainers)."""
 
-import csv
+import json
 from datetime import date
 
 import psycopg
@@ -9,6 +9,7 @@ from psycopg import errors
 
 from erp_migration.etl.db import apply_schema
 from erp_migration.etl.pipeline import run_etl
+from erp_migration.report.build import build_report
 
 pytestmark = pytest.mark.db
 
@@ -53,11 +54,8 @@ def test_every_source_row_has_exactly_one_outcome(conn):
     )
 
 
-def test_load_matches_the_ground_truth(conn, small_dataset):
-    truth = {
-        (t["book"], int(t["sheet_index"]), int(t["row_num"])): t
-        for t in csv.DictReader((small_dataset.truth / "rows.csv").open())
-    }
+def test_load_matches_the_ground_truth(conn, truth_by_row):
+    truth = truth_by_row
     actual = {
         (b, si, rn): (o, rc or "")
         for b, si, rn, o, rc in conn.execute(
@@ -191,6 +189,27 @@ def test_amounts_are_converted_with_the_month_rate(conn):
         WHERE s.currency = 'USD' ORDER BY s.sale_id LIMIT 1""").fetchone()
     amount, amount_rwf, rate = row
     assert amount_rwf == round(amount * rate, 2)
+
+
+def test_report_is_built_from_the_database(conn, small_dataset, tmp_path):
+    readme = tmp_path / "README.md"
+    readme.write_text("intro\n<!-- results:start -->\nold\n<!-- results:end -->\nrest\n")
+    out = tmp_path / "docs" / "index.html"
+    written = build_report(conn, small_dataset.truth, out, readme)
+    assert out in written and readme in written
+    metrics = json.loads((tmp_path / "docs" / "metrics.json").read_text())
+    assert metrics["rows_in"] == _count(conn, "SELECT count(*) FROM staging.rows")
+    assert metrics["core_rows"]["core.sales"] == _count(conn, "SELECT count(*) FROM core.sales")
+    assert metrics["loaded_rows_not_found_in_core"] == 0
+    html = out.read_text()
+    assert f"{metrics['rows_in']:,}" in html
+    text = readme.read_text()
+    assert "old" not in text and "intro" in text and "rest" in text
+    assert f"{metrics['rows_loaded']:,}" in text
+    # Deterministic: building again gives the same bytes.
+    first = out.read_bytes()
+    build_report(conn, small_dataset.truth, out, None)
+    assert out.read_bytes() == first
 
 
 def test_payroll_rows_without_employee_number_are_resolved_by_name(conn):
