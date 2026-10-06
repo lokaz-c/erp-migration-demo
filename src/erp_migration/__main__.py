@@ -1,9 +1,10 @@
-"""Command line: python -m erp_migration generate."""
+"""Command line: python -m erp_migration {generate,etl,calibrate}."""
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from erp_migration.config import (
@@ -11,6 +12,7 @@ from erp_migration.config import (
     DEFAULT_SEED,
     DEFAULT_START_YEAR,
     Paths,
+    database_url,
     default_paths,
 )
 
@@ -29,6 +31,32 @@ def cmd_generate(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_etl(args: argparse.Namespace) -> None:
+    from erp_migration.etl.db import connect
+    from erp_migration.etl.pipeline import run_etl
+
+    started = time.perf_counter()
+    with connect(args.database_url) as conn:
+        result = run_etl(conn, _paths(args).books)
+    print(
+        f"run {result.run_id}: {result.workbooks} workbooks, {result.rows_in} rows in, "
+        f"{time.perf_counter() - started:.1f}s"
+    )
+    for table, c in result.changes.items():
+        print(f"  {table:28} inserted {c['inserted']:6}  updated {c['updated']:6}")
+
+
+def cmd_calibrate(args: argparse.Namespace) -> None:
+    from erp_migration.matching.calibrate import calibrate
+
+    c = calibrate()
+    print(f"seeds {c.seeds}")
+    print("threshold  precision  recall")
+    for r in c.rows:
+        print(f"{r.threshold:9}  {r.scores.precision:9.4f}  {r.scores.recall:6.4f}")
+    print(f"auto-merge threshold: {c.auto_threshold}, review threshold: {c.review_threshold}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="erp_migration")
     parser.add_argument("--data-dir", help="where books and ground truth live (default: data)")
@@ -39,6 +67,13 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--start-year", type=int, default=DEFAULT_START_YEAR)
     g.add_argument("--end-year", type=int, default=DEFAULT_END_YEAR)
     g.set_defaults(func=cmd_generate)
+
+    e = sub.add_parser("etl", help="load the workbooks into PostgreSQL")
+    e.add_argument("--database-url", default=database_url())
+    e.set_defaults(func=cmd_etl)
+
+    c = sub.add_parser("calibrate", help="print the supplier-matching threshold sweep")
+    c.set_defaults(func=cmd_calibrate)
 
     args = parser.parse_args(argv)
     args.func(args)

@@ -32,6 +32,10 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.13"]
+    env:
+      # Database tests start PostgreSQL 18 with testcontainers; in CI a missing
+      # Docker daemon must fail the build instead of skipping those tests.
+      REQUIRE_DB_TESTS: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
