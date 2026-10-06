@@ -1,6 +1,5 @@
 """Tests against a real PostgreSQL 18 (testcontainers)."""
 
-import csv
 import json
 from datetime import date
 
@@ -55,11 +54,8 @@ def test_every_source_row_has_exactly_one_outcome(conn):
     )
 
 
-def test_load_matches_the_ground_truth(conn, small_dataset):
-    truth = {
-        (t["book"], int(t["sheet_index"]), int(t["row_num"])): t
-        for t in csv.DictReader((small_dataset.truth / "rows.csv").open())
-    }
+def test_load_matches_the_ground_truth(conn, truth_by_row):
+    truth = truth_by_row
     actual = {
         (b, si, rn): (o, rc or "")
         for b, si, rn, o, rc in conn.execute(

@@ -1,4 +1,3 @@
-import csv
 import hashlib
 from collections import Counter, defaultdict
 from decimal import Decimal
@@ -25,9 +24,9 @@ def test_same_seed_gives_the_same_books_and_truth(tmp_path):
     assert _digest(a.truth / "rows.csv") != _digest(b.truth / "rows.csv")
 
 
-def test_books_contain_the_promised_mess(small_dataset):
+def test_books_contain_the_promised_mess(small_dataset, truth_rows):
     paths = small_dataset
-    rows = list(csv.DictReader((paths.truth / "rows.csv").open()))
+    rows = truth_rows
     kinds = Counter(r["kind"] for r in rows)
     reasons = Counter(r["expected_reason"] for r in rows if r["expected_outcome"] == "rejected")
     assert kinds["blank"] and kinds["subtotal"] and kinds["data"]
@@ -46,8 +45,8 @@ def test_books_contain_the_promised_mess(small_dataset):
     assert date_cells["datetime"] and date_cells["str"]
 
 
-def test_every_spelling_belongs_to_one_supplier(small_dataset):
-    aliases = list(csv.DictReader((small_dataset.truth / "supplier_aliases.csv").open()))
+def test_every_spelling_belongs_to_one_supplier(truth_aliases):
+    aliases = truth_aliases
     assert len({a["alias"] for a in aliases}) == len(aliases)
     by_supplier = defaultdict(set)
     for a in aliases:
